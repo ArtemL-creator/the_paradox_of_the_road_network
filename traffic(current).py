@@ -4,7 +4,7 @@ import time
 import types
 
 # Глобальные переменные
-modelState = "stopped"  # "stopped", "running", "stopping"
+model_state = "stopped"  # "stopped", "running", "stopping"
 bridgeBlocked = False
 routingMode = "selfish"  # или "random"
 speedMode = "theoretical"  # альтернативы: "actual", "historical"
@@ -509,7 +509,7 @@ def carCensus(sampleInterval):
 
 
 def launchCar():
-    global nextDeparture, globalClock, modelState
+    global nextDeparture, globalClock, model_state
     if orig.has_room() and globalClock >= nextDeparture and modelState == "running" and parkingLot.len > 0:
         nextCar = parkingLot.dequeue()
         if nextCar is None:
@@ -525,7 +525,7 @@ def launchCar():
 
 
 def step():
-    global globalClock, modelState
+    global globalClock, model_state
     global numOfSteps
     # Обновляем состояния узлов и участков в случайном порядке
     numOfSteps = numOfSteps + 1
@@ -609,6 +609,6 @@ def init():
 
 
 if __name__ == "__main__":
-    modelState = "running"
+    model_state = "running"
     init()
     animate()

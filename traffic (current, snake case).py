@@ -2,6 +2,10 @@ import math
 import random
 import time
 import types
+import sys
+from PyQt5.QtWidgets import QApplication
+
+from index_pyqt5 import TrafficApp
 
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
@@ -587,6 +591,17 @@ def animate():
         running = step()
         time.sleep(0.015)  # задержка ~15 мс (примерно 60 кадров/сек)
 
+def go_stop_button():
+    global model_state
+    if model_state == "stopped":
+        model_state = "running"
+        main_window.go_button.setText("Stop")
+        animate()
+    elif model_state == "running":
+        model_state = "stopping"
+        main_window.go_button.setText("Wait")
+        main_window.go_button.setDisabled(True)
+
 
 def init():
     global global_clock
@@ -604,6 +619,11 @@ def init():
 
 
 if __name__ == "__main__":
-    model_state = "running"
+    # model_state = "running"
+    app = QApplication(sys.argv)
+    main_window = TrafficApp()
     init()
-    animate()
+    main_window.go_button.clicked.connect(go_stop_button)
+    main_window.show()
+    sys.exit(app.exec_())
+    # animate()

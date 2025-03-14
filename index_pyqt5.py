@@ -426,10 +426,10 @@ class TrafficApp(QMainWindow):
         controls_layout.setSpacing(5)
 
         # Кнопки "Go" и "Reset"
-        go_button = QPushButton("Go")
-        reset_button = QPushButton("Reset")
-        controls_layout.addWidget(go_button, 0, 0)
-        controls_layout.addWidget(reset_button, 0, 1)
+        self.go_button = QPushButton("Go")
+        self.resetButton = QPushButton("Reset")
+        controls_layout.addWidget(self.go_button, 0, 0)
+        controls_layout.addWidget(self.resetButton, 0, 1)
 
         # Слайдер "Vehicle Launch Rate"
         launch_rate_frame = QWidget()
