@@ -3,20 +3,23 @@ import random
 import time
 import types
 import sys
+from lane import Lane
+from queue import Queue
+
 from PyQt5.QtWidgets import QApplication
 
 from index_pyqt5 import TrafficApp
 
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
-bridge_blocked = True
+bridge_blocked = False
 routing_mode = "selfish"  # или "random"
 speed_mode = "theoretical"  # альтернативы: "actual", "historical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
 next_departure = 0  # следующий такт, когда можно отправить автомобиль
-max_cars = 500  # float("inf")         # если не задано – не ограничено
+max_cars = 200  # float("inf")         # если не задано – не ограничено
 
 car_radius = 3
 car_length = 2 * car_radius
@@ -54,27 +57,7 @@ def periodic(lambda_val):
 launch_timer = poisson  # т.к. launch_timing === "poisson"
 
 
-# Простейшая реализация очереди
-class Queue:
-    def __init__(self, max_size):
-        self.items = []
-        self.max_size = max_size
 
-    def enqueue(self, item):
-        if len(self.items) < self.max_size:
-            self.items.append(item)
-        else:
-            print("Очередь переполнена!")
-
-    def dequeue(self):
-        return self.items.pop(0) if self.items else None
-
-    def peek(self, index):
-        return self.items[index] if index < len(self.items) else None
-
-    @property
-    def len(self):
-        return len(self.items)
 
 
 # Класс для симуляции “аватара” (визуальное представление автомобиля)
@@ -119,19 +102,26 @@ class Node:
     def dispatch(self):
         if self.car:
             # Определяем следующий участок по маршруту (ключ – имя узла)
-            print(f"Узел {self.node_name} пытается отправить машину")
+            # print(f"Узел {self.node_name} пытается отправить машину")
             next_link = self.car.route.directions.get(self.node_name)
             if next_link is not None:
-                print(f"Следующий участок: {next_link.id}")
+                # print(f"Следующий участок: {next_link.id}")
+                # Выбираем свободную полосу на следующем участке
+                free_lane = next_link.choose_free_lane()
                 # Если участок пуст или последний автомобиль уже отъехал на car_length
-                if next_link.car_q.len == 0 or next_link.car_q.items[-1].progress >= car_length:
-                    print("Условие выполнено, машина отправлена")
+                # if next_link.car_q.len == 0 or next_link.car_q.items[-1].progress >= car_length:
+
+                # Если полоса пуста или последний автомобиль отъехал на достаточное расстояние
+                if free_lane.queue.len == 0 or free_lane.queue.items[-1].progress >= car_length:
+                    # print("Условие выполнено, машина отправлена")
                     self.car.progress = 0
                     self.car.avatar.set_position(self.x, self.y)
-                    next_link.car_q.enqueue(self.car)
+                    # next_link.car_q.enqueue(self.car)
+                    free_lane.queue.enqueue(self.car)
                     next_link.update_speed()
                     self.car = None
-
+            else:
+                print("Нет свободных полос на следующем участке!")
 
 # Специальный узел для конечной точки, где происходит фиксация статистики
 class DestinationNode(Node):
@@ -150,7 +140,7 @@ def create_point(x, y):
 
 # Класс участка дороги (Link)
 class Link:
-    def __init__(self, id_str, o_node, d_node, path_length=100, congestible=False):
+    def __init__(self, *, id_str: str, o_node, d_node, num_lanes=1, path_length=100, congestive=False):
         self.id = id_str
         # Определяем начальную и конечную точку по координатам узлов
         self.origin_xy = create_point(o_node.x, o_node.y)
@@ -159,11 +149,25 @@ class Link:
         self.origin_node = o_node
         self.destination_node = d_node
         self.open_to_traffic = True
-        self.car_q = Queue(car_queue_size)
-        self.congestible = congestible
-        self.occupancy = self.car_q.len
+
+        # self.car_q = Queue(car_queue_size)
+        self.lanes = [Lane(lane_id=i, car_queue_size=car_queue_size) for i in range(num_lanes)]
+
+        self.congestive = congestive
+        # self.occupancy = self.car_q.len
+        # Вычисляем занятость как сумму машин во всех полосах
+        self.occupancy = self.get_average_occupancy()
         self.speed = speed_limit
         self.travel_time = self.path_length / self.speed
+
+    def get_total_occupancy(self):
+        """Возвращает общее число машин во всех полосах."""
+        return sum(lane.queue.len for lane in self.lanes)
+
+    def get_average_occupancy(self):
+        """Возвращает среднее число машин на одной полосе."""
+        total = sum(lane.queue.len for lane in self.lanes)
+        return total / len(self.lanes) if self.lanes else 0
 
     def update_speed(self):
         self.speed = speed_limit
@@ -176,41 +180,73 @@ class Link:
         y = self.origin_xy["y"] + t * (self.destination_xy["y"] - self.origin_xy["y"])
         return {"x": x, "y": y}
 
+    def choose_free_lane(self):
+        """Выбирает свободную полосу с наименьшей очередью, при равенстве выбирается случайно."""
+        free_lanes = [lane for lane in self.lanes if not lane.is_blocked]
+        if not free_lanes:
+            return None  # Все полосы заблокированы
+        # Определяем минимальную длину очереди среди свободных полос
+        min_length = min(lane.queue.len for lane in free_lanes)
+        # Фильтруем полосы с минимальной очередью
+        candidate_lanes = [lane for lane in free_lanes if lane.queue.len == min_length]
+        # Если больше одной полосы, выбираем случайно
+        return random.choice(candidate_lanes)
+
     def drive(self):
-        if self.car_q.len > 0:
-            first_car = self.car_q.peek(0)
-            first_car.past_progress = first_car.progress
-            first_car.progress = min(self.path_length, first_car.progress + self.speed)
-            first_car.odometer += first_car.progress - first_car.past_progress
-            car_xy = self.get_car_xy(first_car.progress)
-            first_car.avatar.set_position(car_xy["x"], car_xy["y"])
+        for lane in self.lanes:
+            # Пропускаем заблокированные полосы
+            if lane.is_blocked:
+                continue
 
-            # Обновляем положение последующих автомобилей
-            for i in range(1, self.car_q.len):
-                leader = self.car_q.peek(i - 1)
-                follower = self.car_q.peek(i)
-                follower.past_progress = follower.progress
-                follower.progress = min(follower.progress + self.speed, leader.progress - car_length)
-                follower.odometer += follower.progress - follower.past_progress
-                car_xy = self.get_car_xy(follower.progress)
-                follower.avatar.set_position(car_xy["x"], car_xy["y"])
+            if lane.queue.len > 0:
+            # if self.car_q.len > 0:
+            #     first_car = self.car_q.peek(0)
+                first_car = lane.queue.peek(0)
+                first_car.past_progress = first_car.progress
+                first_car.progress = min(self.path_length, first_car.progress + self.speed)
+                first_car.odometer += first_car.progress - first_car.past_progress
+                car_xy = self.get_car_xy(first_car.progress)
+                first_car.avatar.set_position(car_xy["x"], car_xy["y"])
 
-            if first_car.progress >= self.path_length and self.destination_node.has_room():
-                self.destination_node.accept(self.car_q.dequeue())
-            self.update_speed()
+                # Обновляем положение последующих автомобилей
+                # for i in range(1, self.car_q.len):
+                for i in range(1, lane.queue.len):
+                    # leader = self.car_q.peek(i - 1)
+                    leader = lane.queue.peek(i - 1)
+                    # follower = self.car_q.peek(i)
+                    follower = lane.queue.peek(i)
+                    follower.past_progress = follower.progress
+                    follower.progress = min(follower.progress + self.speed, leader.progress - car_length)
+                    follower.odometer += follower.progress - follower.past_progress
+                    car_xy = self.get_car_xy(follower.progress)
+                    follower.avatar.set_position(car_xy["x"], car_xy["y"])
+
+                if first_car.progress >= self.path_length and self.destination_node.has_room():
+                    # self.destination_node.accept(self.car_q.dequeue())
+                    self.destination_node.accept(lane.queue.dequeue())
+                self.update_speed()
+
+    # def evacuate(self):
+    #     while self.car_q.len > 0:
+    #         c = self.car_q.dequeue()
+    #         c.park()
+    #     self.update_speed()
 
     def evacuate(self):
-        while self.car_q.len > 0:
-            c = self.car_q.dequeue()
-            c.park()
+        """Очищает дорогу от машин"""
+        for lane in self.lanes:
+            while lane.queue.len > 0:
+                c = lane.queue.dequeue()
+                c.park()
         self.update_speed()
-
 
 # Подкласс для “узких” (congestible) участков, скорость которых зависит от плотности трафика
 class CongestibleLink(Link):
     def update_speed(self):
         epsilon = 1e-10
-        self.occupancy = self.car_q.len
+        # self.occupancy = self.car_q.len
+        # Обновляем occupancy как суммарное количество машин во всех полосах
+        self.occupancy = self.get_average_occupancy()
         self.speed = speed_limit - (self.occupancy * car_length * speed_limit * congestion_coef) / self.path_length
         if self.speed <= 0:
             self.speed = epsilon
@@ -292,12 +328,12 @@ south = Node("south", x=50, y=50)
 north = Node("north", x=50, y=-50)
 
 # Создаём участки дороги
-a_link = CongestibleLink("a", orig, south, path_length=270, congestible=True)
-a_link_noncongestible = Link("A", orig, north, path_length=500)
-b_link = CongestibleLink("b", north, dest, path_length=270, congestible=True)
-b_link_noncongestible = Link("B", south, dest, path_length=500)
-sn_link = Link("sn-bridge", south, north, path_length=40)
-ns_link = Link("ns-bridge", north, south, path_length=40)
+a_link = CongestibleLink(id_str="a", o_node=orig, d_node=south, path_length=270, congestive=True)
+A_link_noncongestible = Link(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=2)
+b_link = CongestibleLink(id_str="b", o_node=north, d_node=dest, path_length=270, congestive=True)
+B_link_noncongestible = Link(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=2)
+sn_link = Link(id_str="sn-bridge", o_node=south, d_node=north, path_length=40)
+ns_link = Link(id_str="ns-bridge", o_node=north, d_node=south, path_length=40)
 
 sn_link.open_to_traffic = False
 ns_link.open_to_traffic = False
@@ -312,22 +348,22 @@ ns_link.get_car_xy = types.MethodType(vertical_up_get_car_xy, ns_link)
 route_Ab = Route()
 route_Ab.label = "Ab"
 route_Ab.paint_color = "#cb0130"
-route_Ab.directions = {"orig": a_link_noncongestible, "south": None, "north": b_link, "dest": parking_lot}
-route_Ab.itinerary = [a_link_noncongestible, b_link]
+route_Ab.directions = {"orig": A_link_noncongestible, "south": None, "north": b_link, "dest": parking_lot}
+route_Ab.itinerary = [A_link_noncongestible, b_link]
 route_Ab.calc_route_length()
 
 route_aB = Route()
 route_aB.label = "aB"
 route_aB.paint_color = "#1010a5"
-route_aB.directions = {"orig": a_link, "south": b_link_noncongestible, "north": None, "dest": parking_lot}
-route_aB.itinerary = [a_link, b_link_noncongestible]
+route_aB.directions = {"orig": a_link, "south": B_link_noncongestible, "north": None, "dest": parking_lot}
+route_aB.itinerary = [a_link, B_link_noncongestible]
 route_aB.calc_route_length()
 
 route_AB = Route()
 route_AB.label = "AB"
 route_AB.paint_color = "#ffc526"
-route_AB.directions = {"orig": a_link_noncongestible, "south": b_link_noncongestible, "north": ns_link, "dest": parking_lot}
-route_AB.itinerary = [a_link_noncongestible, ns_link, b_link_noncongestible]
+route_AB.directions = {"orig": A_link_noncongestible, "south": B_link_noncongestible, "north": ns_link, "dest": parking_lot}
+route_AB.itinerary = [A_link_noncongestible, ns_link, B_link_noncongestible]
 route_AB.calc_route_length()
 
 route_ab = Route()
@@ -536,23 +572,23 @@ def step():
         dest.dispatch()
         b_link.drive()
         dest.dispatch()
-        b_link_noncongestible.drive()
+        B_link_noncongestible.drive()
     else:
         dest.dispatch()
-        b_link_noncongestible.drive()
+        B_link_noncongestible.drive()
         dest.dispatch()
         b_link.drive()
 
     if coin_flip():
         north.dispatch()
-        a_link_noncongestible.drive()
+        A_link_noncongestible.drive()
         north.dispatch()
         sn_link.drive()
     else:
         north.dispatch()
         sn_link.drive()
         north.dispatch()
-        a_link_noncongestible.drive()
+        A_link_noncongestible.drive()
 
     if coin_flip():
         south.dispatch()
@@ -589,18 +625,18 @@ def animate():
     running = True
     while running:
         running = step()
-        time.sleep(0.015)  # задержка ~15 мс (примерно 60 кадров/сек)
+        # time.sleep(0.015)  # задержка ~15 мс (примерно 60 кадров/сек)
 
-def go_stop_button():
-    global model_state
-    if model_state == "stopped":
-        model_state = "running"
-        main_window.go_button.setText("Stop")
-        animate()
-    elif model_state == "running":
-        model_state = "stopping"
-        main_window.go_button.setText("Wait")
-        main_window.go_button.setDisabled(True)
+# def go_stop_button():
+#     global model_state
+#     if model_state == "stopped":
+#         model_state = "running"
+#         main_window.go_button.setText("Stop")
+#         animate()
+#     elif model_state == "running":
+#         model_state = "stopping"
+#         main_window.go_button.setText("Wait")
+#         main_window.go_button.setDisabled(True)
 
 
 def init():
@@ -608,9 +644,9 @@ def init():
     make_cars(car_queue_size)
     global_clock = 0
     sync_controls()
-    a_link_noncongestible.update_speed()
+    A_link_noncongestible.update_speed()
     a_link.update_speed()
-    b_link_noncongestible.update_speed()
+    B_link_noncongestible.update_speed()
     b_link.update_speed()
     ns_link.update_speed()
     sn_link.update_speed()
@@ -619,11 +655,11 @@ def init():
 
 
 if __name__ == "__main__":
-    # model_state = "running"
-    app = QApplication(sys.argv)
-    main_window = TrafficApp()
+    model_state = "running"
+    # app = QApplication(sys.argv)
+    # main_window = TrafficApp()
     init()
-    main_window.go_button.clicked.connect(go_stop_button)
-    main_window.show()
-    sys.exit(app.exec_())
-    # animate()
+    # main_window.go_button.clicked.connect(go_stop_button)
+    # main_window.show()
+    # sys.exit(app.exec_())
+    animate()
