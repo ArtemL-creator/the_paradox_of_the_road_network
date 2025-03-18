@@ -3,6 +3,8 @@ import random
 import time
 import types
 import sys
+from random import choice
+
 from lane import Lane
 from queue import Queue
 
@@ -55,9 +57,6 @@ def periodic(lambda_val):
 
 # Функция выбора времени запуска
 launch_timer = poisson  # т.к. launch_timing === "poisson"
-
-
-
 
 
 # Класс для симуляции “аватара” (визуальное представление автомобиля)
@@ -123,6 +122,7 @@ class Node:
             else:
                 print("Нет свободных полос на следующем участке!")
 
+
 # Специальный узел для конечной точки, где происходит фиксация статистики
 class DestinationNode(Node):
     def dispatch(self):
@@ -140,7 +140,7 @@ def create_point(x, y):
 
 # Класс участка дороги (Link)
 class Link:
-    def __init__(self, *, id_str: str, o_node, d_node, num_lanes=1, path_length=100, congestive=False):
+    def __init__(self, *, id_str: str, o_node, d_node, num_lanes=1, path_length=100, congestive=True):
         self.id = id_str
         # Определяем начальную и конечную точку по координатам узлов
         self.origin_xy = create_point(o_node.x, o_node.y)
@@ -180,17 +180,29 @@ class Link:
         y = self.origin_xy["y"] + t * (self.destination_xy["y"] - self.origin_xy["y"])
         return {"x": x, "y": y}
 
-    def choose_free_lane(self):
+    def choose_free_lane(self) -> Lane | None:
         """Выбирает свободную полосу с наименьшей очередью, при равенстве выбирается случайно."""
         free_lanes = [lane for lane in self.lanes if not lane.is_blocked]
         if not free_lanes:
+            # print(f"[DEBUG] Дорога {self.id}: все полосы заблокированы!")
             return None  # Все полосы заблокированы
+
         # Определяем минимальную длину очереди среди свободных полос
         min_length = min(lane.queue.len for lane in free_lanes)
         # Фильтруем полосы с минимальной очередью
         candidate_lanes = [lane for lane in free_lanes if lane.queue.len == min_length]
-        # Если больше одной полосы, выбираем случайно
-        return random.choice(candidate_lanes)
+
+        # Выводим информацию о кандидативах
+        candidate_info = ", ".join(
+            [f"Полоса {lane.lane_id} (очередь: {lane.queue.len})" for lane in candidate_lanes]
+        )
+        # print(
+        #     f"[DEBUG] Дорога {self.id}: свободные полосы с минимальной очередью (длина очереди = {min_length}): {candidate_info}")
+
+        # Если больше одной полосы, выбираем случайным образом
+        selected_lane = random.choice(candidate_lanes)
+        # print(f"[DEBUG] Дорога {self.id}: выбрана полоса {selected_lane.lane_id} (очередь: {selected_lane.queue.len})")
+        return selected_lane
 
     def drive(self):
         for lane in self.lanes:
@@ -199,8 +211,8 @@ class Link:
                 continue
 
             if lane.queue.len > 0:
-            # if self.car_q.len > 0:
-            #     first_car = self.car_q.peek(0)
+                # if self.car_q.len > 0:
+                #     first_car = self.car_q.peek(0)
                 first_car = lane.queue.peek(0)
                 first_car.past_progress = first_car.progress
                 first_car.progress = min(self.path_length, first_car.progress + self.speed)
@@ -240,18 +252,37 @@ class Link:
                 c.park()
         self.update_speed()
 
+
 # Подкласс для “узких” (congestible) участков, скорость которых зависит от плотности трафика
 class CongestibleLink(Link):
     def update_speed(self):
         epsilon = 1e-10
         # self.occupancy = self.car_q.len
-        # Обновляем occupancy как суммарное количество машин во всех полосах
-        self.occupancy = self.get_average_occupancy()
-        self.speed = speed_limit - (self.occupancy * car_length * speed_limit * congestion_coef) / self.path_length
+        self.occupancy = self.get_average_occupancy()  # Средняя загруженность на полосу
+        density_factor = self.occupancy / car_queue_size  # Плотность загруженности (0 - 1)
+        print(f'density_factor = {density_factor}')
+
+        # Динамический коэффициент сопротивления: уменьшается, если полос больше
+        dynamic_congestion_coef = congestion_coef * (1 - (len(self.lanes) - 1) * 0.1)
+        dynamic_congestion_coef = max(dynamic_congestion_coef, 0.1)  # Ограничение снизу
+
+        # self.speed = speed_limit - (self.occupancy * car_length * speed_limit * congestion_coef) / self.path_length
+        self.speed = speed_limit - (self.occupancy * car_length * speed_limit * dynamic_congestion_coef) / self.path_length
+        # Новая формула с учетом средней загрузки и количества полос
+        # self.speed = speed_limit - (density_factor * car_length * speed_limit * dynamic_congestion_coef) / self.path_length
+
         if self.speed <= 0:
             self.speed = epsilon
+
         self.travel_time = self.path_length / self.speed
 
+        # 🛠 Отладка: печатаем текущие параметры
+        print(f"[DEBUG] Дорога {self.id}:")
+        print(f" - Полос: {len(self.lanes)}")
+        print(f" - Заполненность: {self.occupancy:.2f}/{car_queue_size} (среднее)")
+        print(f" - Коэффициент сопротивления: {dynamic_congestion_coef:.3f}")
+        print(f" - Скорость: {self.speed:.2f} (ограничение: {speed_limit})")
+        print(f" - Время проезда: {self.travel_time:.2f} сек\n")
 
 # Методы для расчёта координат автомобиля на участке
 def horizontal_get_car_xy(self, progress):
@@ -328,12 +359,16 @@ south = Node("south", x=50, y=50)
 north = Node("north", x=50, y=-50)
 
 # Создаём участки дороги
-a_link = CongestibleLink(id_str="a", o_node=orig, d_node=south, path_length=270, congestive=True)
-A_link_noncongestible = Link(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=2)
-b_link = CongestibleLink(id_str="b", o_node=north, d_node=dest, path_length=270, congestive=True)
-B_link_noncongestible = Link(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=2)
-sn_link = Link(id_str="sn-bridge", o_node=south, d_node=north, path_length=40)
-ns_link = Link(id_str="ns-bridge", o_node=north, d_node=south, path_length=40)
+a_link = CongestibleLink(id_str="a", o_node=orig, d_node=south, path_length=270, congestive=True, num_lanes=1)
+# A_link_noncongestible = Link(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=3)
+A_link_noncongestible = CongestibleLink(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=3)
+b_link = CongestibleLink(id_str="b", o_node=north, d_node=dest, path_length=270, congestive=True, num_lanes=1)
+# B_link_noncongestible = Link(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
+B_link_noncongestible = CongestibleLink(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
+# sn_link = Link(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=1)
+sn_link = CongestibleLink(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=1)
+# ns_link = Link(id_str="ns-bridge", o_node=north, d_node=south, path_length=40, num_lanes=1)
+ns_link = CongestibleLink(id_str="ns-bridge", o_node=north, d_node=south, path_length=40, num_lanes=1)
 
 sn_link.open_to_traffic = False
 ns_link.open_to_traffic = False
@@ -362,7 +397,8 @@ route_aB.calc_route_length()
 route_AB = Route()
 route_AB.label = "AB"
 route_AB.paint_color = "#ffc526"
-route_AB.directions = {"orig": A_link_noncongestible, "south": B_link_noncongestible, "north": ns_link, "dest": parking_lot}
+route_AB.directions = {"orig": A_link_noncongestible, "south": B_link_noncongestible, "north": ns_link,
+                       "dest": parking_lot}
 route_AB.itinerary = [A_link_noncongestible, ns_link, B_link_noncongestible]
 route_AB.calc_route_length()
 
@@ -541,7 +577,8 @@ def car_census(sample_interval):
         for c in car_array:
             if c and c.route:
                 route_counts[c.route.label] += 1
-        print(global_clock / speed_limit, route_counts["Ab"], route_counts["aB"], route_counts["AB"], route_counts["ab"])
+        print(global_clock / speed_limit, route_counts["Ab"], route_counts["aB"], route_counts["AB"],
+              route_counts["ab"])
 
 
 def launch_car():
@@ -626,6 +663,7 @@ def animate():
     while running:
         running = step()
         # time.sleep(0.015)  # задержка ~15 мс (примерно 60 кадров/сек)
+
 
 # def go_stop_button():
 #     global model_state
