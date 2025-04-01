@@ -1,27 +1,30 @@
 import math
 import random
-import time
 import types
 import sys
 from random import choice
 
 from lane import Lane
 from queue import Queue
+from traffic_light import TrafficLight
+from avatar import Avatar
+from road_event import RoadEvent
 
-from PyQt5.QtWidgets import QApplication
-
-from index_pyqt5 import TrafficApp
+# from PyQt5.QtWidgets import QApplication
+# from index_pyqt5 import TrafficApp
 
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
 bridge_blocked = False
+traffic_light_on = False
+road_events_on = False
 routing_mode = "selfish"  # или "random"
 speed_mode = "theoretical"  # альтернативы: "actual", "historical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
 next_departure = 0  # следующий такт, когда можно отправить автомобиль
-max_cars = 200  # float("inf")         # если не задано – не ограничено
+max_cars = 1200  # float("inf")         # если не задано – не ограничено
 
 car_radius = 3
 car_length = 2 * car_radius
@@ -58,27 +61,6 @@ def periodic(lambda_val):
 # Функция выбора времени запуска
 launch_timer = poisson  # т.к. launch_timing === "poisson"
 
-
-# Класс для симуляции “аватара” (визуальное представление автомобиля)
-class Avatar:
-    def __init__(self, x=0, y=0, r=car_radius, fill="#000", display="none"):
-        self.x = x
-        self.y = y
-        self.r = r
-        self.fill = fill
-        self.display = display
-
-    def set_position(self, x, y):
-        self.x = x
-        self.y = y
-
-    def set_fill(self, fill):
-        self.fill = fill
-
-    def set_display(self, display):
-        self.display = display
-
-
 # Класс узла (Node). Для упрощения координаты передаются в конструкторе.
 class Node:
     def __init__(self, id_str, x=0, y=0):
@@ -102,23 +84,28 @@ class Node:
         if self.car:
             # Определяем следующий участок по маршруту (ключ – имя узла)
             # print(f"Узел {self.node_name} пытается отправить машину")
+
             next_link = self.car.route.directions.get(self.node_name)
             if next_link is not None:
                 # print(f"Следующий участок: {next_link.id}")
+
                 # Выбираем свободную полосу на следующем участке
                 free_lane = next_link.choose_free_lane()
                 # Если участок пуст или последний автомобиль уже отъехал на car_length
                 # if next_link.car_q.len == 0 or next_link.car_q.items[-1].progress >= car_length:
+                if free_lane is not None:
+                    # Если полоса пуста или последний автомобиль отъехал на достаточное расстояние
+                    if free_lane.queue.len == 0 or free_lane.queue.items[-1].progress >= car_length:
+                        # print("Условие выполнено, машина отправлена")
 
-                # Если полоса пуста или последний автомобиль отъехал на достаточное расстояние
-                if free_lane.queue.len == 0 or free_lane.queue.items[-1].progress >= car_length:
-                    # print("Условие выполнено, машина отправлена")
-                    self.car.progress = 0
-                    self.car.avatar.set_position(self.x, self.y)
-                    # next_link.car_q.enqueue(self.car)
-                    free_lane.queue.enqueue(self.car)
-                    next_link.update_speed()
-                    self.car = None
+                        self.car.progress = 0
+                        self.car.avatar.set_position(self.x, self.y)
+                        # next_link.car_q.enqueue(self.car)
+                        free_lane.queue.enqueue(self.car)
+                        next_link.update_speed()
+                        self.car = None
+                else:
+                    print("Нет свободных полос на участке", next_link.id)
             else:
                 print("Нет свободных полос на следующем участке!")
 
@@ -184,7 +171,7 @@ class Link:
         """Выбирает свободную полосу с наименьшей очередью, при равенстве выбирается случайно."""
         free_lanes = [lane for lane in self.lanes if not lane.is_blocked]
         if not free_lanes:
-            # print(f"[DEBUG] Дорога {self.id}: все полосы заблокированы!")
+            print(f"[LOG LANE CHOICE] Дорога {self.id}: все полосы заблокированы!")
             return None  # Все полосы заблокированы
 
         # Определяем минимальную длину очереди среди свободных полос
@@ -196,18 +183,48 @@ class Link:
         candidate_info = ", ".join(
             [f"Полоса {lane.lane_id} (очередь: {lane.queue.len})" for lane in candidate_lanes]
         )
-        # print(
-        #     f"[DEBUG] Дорога {self.id}: свободные полосы с минимальной очередью (длина очереди = {min_length}): {candidate_info}")
+        # print(f"[DEBUG] Дорога {self.id}: свободные полосы с минимальной очередью (длина очереди = {min_length}): {candidate_info}")
 
         # Если больше одной полосы, выбираем случайным образом
         selected_lane = random.choice(candidate_lanes)
         # print(f"[DEBUG] Дорога {self.id}: выбрана полоса {selected_lane.lane_id} (очередь: {selected_lane.queue.len})")
         return selected_lane
 
+    def try_reassign_blocked_lane(self, blocked_lane: Lane):
+        """
+        Переносит автомобили из заблокированной полосы blocked_lane
+        только на непосредственно соседние полосы (разница в lane_id равна 1).
+        """
+        # Если участок однополосный, lane change бессмысленен.
+        if len(self.lanes) == 1:
+            return False
+
+        # Выбираем только те полосы, у которых разница в lane_id равна 1
+        candidate_lanes = [lane for lane in self.lanes if lane is not blocked_lane and not lane.is_blocked and abs(lane.lane_id - blocked_lane.lane_id) == 1]
+        if not candidate_lanes:
+            print(f"[LANE CHANGE] Нет соседних незаблокированных полос для участка {self.id} от полосы {blocked_lane.lane_id}")
+            return False
+
+        # Если несколько кандидатов, выбираем случайно
+        target_lane = random.choice(candidate_lanes)
+
+        # Если выбранная полоса подходит для перевода
+        if target_lane.queue.len == 0 or target_lane.queue.items[-1].progress >= car_length:
+            # Переносим все автомобили из заблокированной полосы (или хотя бы одного)
+            while blocked_lane.queue.len > 0:
+                car = blocked_lane.queue.dequeue()
+                target_lane.queue.enqueue(car)
+                print(f"[LANE CHANGE] Машина {car.serial_number} переехала с полосы {blocked_lane.lane_id} на соседнюю полосу {target_lane.lane_id} участка {self.id}")
+            return True
+        else:
+            print(f"[LANE CHANGE] Соседняя полоса {target_lane.lane_id} участка {self.id} не готова принять автомобили")
+            return False
+
     def drive(self):
         for lane in self.lanes:
-            # Пропускаем заблокированные полосы
+            # Если полоса заблокирована, пытаемся перевести автомобили на соседние полосы
             if lane.is_blocked:
+                self.try_reassign_blocked_lane(lane)
                 continue
 
             if lane.queue.len > 0:
@@ -257,32 +274,24 @@ class Link:
 class CongestibleLink(Link):
     def update_speed(self):
         epsilon = 1e-10
-        # self.occupancy = self.car_q.len
         self.occupancy = self.get_average_occupancy()  # Средняя загруженность на полосу
         density_factor = self.occupancy / car_queue_size  # Плотность загруженности (0 - 1)
-        print(f'density_factor = {density_factor}')
-
-        # Динамический коэффициент сопротивления: уменьшается, если полос больше
         dynamic_congestion_coef = congestion_coef * (1 - (len(self.lanes) - 1) * 0.1)
         dynamic_congestion_coef = max(dynamic_congestion_coef, 0.1)  # Ограничение снизу
-
-        # self.speed = speed_limit - (self.occupancy * car_length * speed_limit * congestion_coef) / self.path_length
-        self.speed = speed_limit - (self.occupancy * car_length * speed_limit * dynamic_congestion_coef) / self.path_length
-        # Новая формула с учетом средней загрузки и количества полос
-        # self.speed = speed_limit - (density_factor * car_length * speed_limit * dynamic_congestion_coef) / self.path_length
-
+        self.speed = speed_limit - (
+                self.occupancy * car_length * speed_limit * dynamic_congestion_coef) / self.path_length
         if self.speed <= 0:
             self.speed = epsilon
-
         self.travel_time = self.path_length / self.speed
 
-        # 🛠 Отладка: печатаем текущие параметры
-        print(f"[DEBUG] Дорога {self.id}:")
-        print(f" - Полос: {len(self.lanes)}")
-        print(f" - Заполненность: {self.occupancy:.2f}/{car_queue_size} (среднее)")
-        print(f" - Коэффициент сопротивления: {dynamic_congestion_coef:.3f}")
-        print(f" - Скорость: {self.speed:.2f} (ограничение: {speed_limit})")
-        print(f" - Время проезда: {self.travel_time:.2f} сек\n")
+        # Отладка: печатаем текущие параметры
+        # print(f"[DEBUG] Дорога {self.id}:")
+        # print(f" - Полос: {len(self.lanes)}")
+        # print(f" - Заполненность: {self.occupancy:.2f}/{car_queue_size} (среднее)")
+        # print(f" - Коэффициент сопротивления: {dynamic_congestion_coef:.3f}")
+        # print(f" - Скорость: {self.speed:.2f} (ограничение: {speed_limit})")
+        # print(f" - Время проезда: {self.travel_time:.2f} сек\n")
+
 
 # Методы для расчёта координат автомобиля на участке
 def horizontal_get_car_xy(self, progress):
@@ -319,17 +328,26 @@ class Route:
 
     def calc_travel_time(self):
         if speed_mode == "theoretical":
-            self.calc_travel_time_theoretical()
+            if traffic_light_on:
+                self.calc_travel_time_theoretical_with_traffic_lights()
+            else:
+                self.calc_travel_time_theoretical()
         elif speed_mode == "actual":
-            self.calc_travel_time_actual()
+            if traffic_light_on:
+                self.calc_travel_time_actual_with_traffic_lights()
+            else:
+                self.calc_travel_time_actual()
         else:
             self.calc_travel_time_historical()
 
     def calc_travel_time_theoretical(self):
         tt = 0
+        print(f"[LOG ROUTE TIME CALC] Маршрут {self.label}:")
         for link in self.itinerary:
             tt += link.travel_time
+            print(f"[LOG ROUTE TIME CALC]   Участок {link.id}: длина={link.path_length}, скорость={link.speed}, время={link.travel_time}")
         self.travel_time = tt
+
 
     def calc_travel_time_actual(self):
         n = 0
@@ -345,6 +363,7 @@ class Route:
         else:
             self.travel_time = total_tt / n
 
+
     def calc_travel_time_historical(self):
         if dashboard.counts.get(self.label, 0) == 0:
             self.travel_time = self.route_length / speed_limit
@@ -352,19 +371,41 @@ class Route:
             self.travel_time = dashboard.times[self.label] / dashboard.counts[self.label]
 
 
+# Создаем светофор с фазами (например, фаза 1 длится 30 шагов, фаза 2 – 30 шагов)
+# Создаем два отдельных светофора
+north_signal = TrafficLight(phase1_duration=30, phase2_duration=30)
+south_signal = TrafficLight(phase1_duration=30, phase2_duration=30)
+
+# Настраиваем фазовую карту для узла south:
+# В фазе 1 зелёный для "sn-bridge", в фазе 2 зелёный для, скажем, "other-link"
+south_phase_map = {
+    1: {"sn-bridge"},
+    2: {"B"}
+}
+
+north_phase_map = {
+    1: {"ns-bridge"},
+    2: {"b"}
+}
+
 # Создаём узлы (с произвольными координатами)
 orig = Node("orig", x=0, y=0)
 dest = DestinationNode("dest", x=100, y=0)
-south = Node("south", x=50, y=50)
-north = Node("north", x=50, y=-50)
+if traffic_light_on:
+    # south = TrafficNode(id_str="south", x=50, y=50, traffic_light=south_signal, phase_map=south_phase_map)
+    # north = TrafficNode(id_str="north", x=50, y=-50, traffic_light=north_signal, phase_map=north_phase_map)
+    pass
+else:
+    south = Node("south", x=50, y=50)
+    north = Node("north", x=50, y=-50)
 
 # Создаём участки дороги
 a_link = CongestibleLink(id_str="a", o_node=orig, d_node=south, path_length=270, congestive=True, num_lanes=1)
-# A_link_noncongestible = Link(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=3)
-A_link_noncongestible = CongestibleLink(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=3)
+# A_link = Link(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=3)
+A_link = CongestibleLink(id_str="A", o_node=orig, d_node=north, path_length=500, num_lanes=3)
 b_link = CongestibleLink(id_str="b", o_node=north, d_node=dest, path_length=270, congestive=True, num_lanes=1)
-# B_link_noncongestible = Link(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
-B_link_noncongestible = CongestibleLink(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
+# B_link = Link(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
+B_link = CongestibleLink(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
 # sn_link = Link(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=1)
 sn_link = CongestibleLink(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=1)
 # ns_link = Link(id_str="ns-bridge", o_node=north, d_node=south, path_length=40, num_lanes=1)
@@ -383,23 +424,22 @@ ns_link.get_car_xy = types.MethodType(vertical_up_get_car_xy, ns_link)
 route_Ab = Route()
 route_Ab.label = "Ab"
 route_Ab.paint_color = "#cb0130"
-route_Ab.directions = {"orig": A_link_noncongestible, "south": None, "north": b_link, "dest": parking_lot}
-route_Ab.itinerary = [A_link_noncongestible, b_link]
+route_Ab.directions = {"orig": A_link, "south": None, "north": b_link, "dest": parking_lot}
+route_Ab.itinerary = [A_link, b_link]
 route_Ab.calc_route_length()
 
 route_aB = Route()
 route_aB.label = "aB"
 route_aB.paint_color = "#1010a5"
-route_aB.directions = {"orig": a_link, "south": B_link_noncongestible, "north": None, "dest": parking_lot}
-route_aB.itinerary = [a_link, B_link_noncongestible]
+route_aB.directions = {"orig": a_link, "south": B_link, "north": None, "dest": parking_lot}
+route_aB.itinerary = [a_link, B_link]
 route_aB.calc_route_length()
 
 route_AB = Route()
 route_AB.label = "AB"
 route_AB.paint_color = "#ffc526"
-route_AB.directions = {"orig": A_link_noncongestible, "south": B_link_noncongestible, "north": ns_link,
-                       "dest": parking_lot}
-route_AB.itinerary = [A_link_noncongestible, ns_link, B_link_noncongestible]
+route_AB.directions = {"orig": A_link, "south": B_link, "north": ns_link, "dest": parking_lot}
+route_AB.itinerary = [A_link, ns_link, B_link]
 route_AB.calc_route_length()
 
 route_ab = Route()
@@ -454,16 +494,24 @@ def choose_route():
     # Принудительно обновить время для всех маршрутов
     for route in available_routes:
         route.calc_travel_time()
+        print(f"[LOG ROUTE SELECTION] Маршрут {route.label}: теоретическое время = {route.travel_time}")
 
     if routing_mode == "random":
-        return Chooser.random_choice(available_routes)
+        chosen_route = Chooser.random_choice(available_routes)
+        print(f"[LOG ROUTE SELECTION] Выбран случайный маршрут: {chosen_route.label}")
+        return chosen_route
     else:
         for route in available_routes:
             route.calc_travel_time()
         if selection_method == "minimum":
-            return Chooser.min_choice(available_routes)
+            chosen_route = Chooser.min_choice(available_routes)
+            print(
+                f"[LOG ROUTE SELECTION] Выбран маршрут с минимальным временем: {chosen_route.label} (время = {chosen_route.travel_time})")
+            return chosen_route
         else:
-            return Chooser.probabilistic(available_routes)
+            chosen_route = Chooser.probabilistic(available_routes)
+            print(f"[LOG ROUTE SELECTION] Выбран маршрут вероятностным методом: {chosen_route.label}")
+            return chosen_route
 
 
 # Класс автомобиля
@@ -476,7 +524,8 @@ class Car:
         self.arrive_time = 0
         self.route = None
         self.odometer = 0
-        self.avatar = Avatar()
+        self.waiting_time = 0  # суммарное время ожидания на узлах
+        self.avatar = Avatar(r=car_radius)
         parking_lot.enqueue(self)
 
     def park(self):
@@ -596,11 +645,48 @@ def launch_car():
         dashboard.record_departure()
         next_departure = global_clock + launch_timer(launch_rate / speed_limit)
 
+# Список текущих дорожных событий (ремонтов)
+road_events = []
+
+def update_road_events(current_time):
+    for event in road_events:
+        event.update(current_time)
+
+def schedule_random_repair(current_time):
+    # Выбираем случайный участок из списка участков
+    if bridge_blocked:
+        link = random.choice([a_link, A_link, b_link, B_link])
+    else:
+        link = random.choice([a_link, A_link, b_link, B_link, sn_link, ns_link])
+    # Выбираем случайную полосу, если таковая есть
+    available_lanes = [lane for lane in link.lanes if not lane.is_blocked]
+    if available_lanes:
+        lane = random.choice(available_lanes)
+        # Определяем время начала ремонта – например, через несколько тактов от текущего
+        start_time = current_time + random.randint(5, 20)
+        duration = random.randint(10, 50)
+        event = RoadEvent(link=link, lane=lane, start_time=start_time, duration=duration)
+        road_events.append(event)
+        print(f"[ROAD EVENT] Запланирован ремонт на участке {link.id}, полоса {lane.lane_id} начиная с такта {start_time} на {duration} тактов")
+
 
 def step():
     global global_clock, model_state, num_of_steps
     # Обновляем состояния узлов и участков в случайном порядке
     num_of_steps = num_of_steps + 1
+
+    # Обновляем события ремонта
+    if road_events_on:
+        update_road_events(global_clock)
+        # С вероятностью p планируем случайный ремонт
+        if random.random() < 0.05:
+            schedule_random_repair(global_clock)
+
+
+    # Обновляем светофор(ы) для узлов с сигналами
+    if traffic_light_on:
+        for node in [south, north]:
+            node.traffic_light.update()
 
     if num_of_steps == 69:
         pass
@@ -609,23 +695,23 @@ def step():
         dest.dispatch()
         b_link.drive()
         dest.dispatch()
-        B_link_noncongestible.drive()
+        B_link.drive()
     else:
         dest.dispatch()
-        B_link_noncongestible.drive()
+        B_link.drive()
         dest.dispatch()
         b_link.drive()
 
     if coin_flip():
         north.dispatch()
-        A_link_noncongestible.drive()
+        A_link.drive()
         north.dispatch()
         sn_link.drive()
     else:
         north.dispatch()
         sn_link.drive()
         north.dispatch()
-        A_link_noncongestible.drive()
+        A_link.drive()
 
     if coin_flip():
         south.dispatch()
@@ -640,8 +726,8 @@ def step():
 
     orig.dispatch()
     launch_car()
-    orig.dispatch()
-    launch_car()
+    # orig.dispatch()
+    # launch_car()
     # Для отладки можно раскомментировать:
     # car_census(9)
     global_clock += speed_limit
@@ -682,9 +768,9 @@ def init():
     make_cars(car_queue_size)
     global_clock = 0
     sync_controls()
-    A_link_noncongestible.update_speed()
+    A_link.update_speed()
     a_link.update_speed()
-    B_link_noncongestible.update_speed()
+    B_link.update_speed()
     b_link.update_speed()
     ns_link.update_speed()
     sn_link.update_speed()
