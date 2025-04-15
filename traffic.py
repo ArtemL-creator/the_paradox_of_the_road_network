@@ -7,6 +7,8 @@ from random import choice
 from lane import Lane
 from queue import Queue
 from traffic_light import TrafficLight
+from multi_phase_traffic_light import MultiPhaseTrafficLight
+# from traffic_node import TrafficNode
 from avatar import Avatar
 from road_event import RoadEvent
 
@@ -18,13 +20,13 @@ model_state = "stopped"  # "stopped", "running", "stopping"
 bridge_blocked = False
 traffic_light_on = False
 road_events_on = False
-routing_mode = "selfish"  # или "random"
-speed_mode = "theoretical"  # альтернативы: "actual", "historical"
+routing_mode = "selfish"  # или "random", "selfish"
+speed_mode = "actual"  # альтернативы: "actual", "historical", "theoretical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
 next_departure = 0  # следующий такт, когда можно отправить автомобиль
-max_cars = 1200  # float("inf")         # если не задано – не ограничено
+max_cars = 1500  # float("inf")         # если не задано – не ограничено
 
 car_radius = 3
 car_length = 2 * car_radius
@@ -61,6 +63,7 @@ def periodic(lambda_val):
 # Функция выбора времени запуска
 launch_timer = poisson  # т.к. launch_timing === "poisson"
 
+
 # Класс узла (Node). Для упрощения координаты передаются в конструкторе.
 class Node:
     def __init__(self, id_str, x=0, y=0):
@@ -68,12 +71,20 @@ class Node:
         self.x = x
         self.y = y
         self.car = None
+        self.arrived_from_link = None  # Новое поле
 
     def has_room(self):
         return self.car is None
 
-    def accept(self, car):
-        self.car = car
+    def accept(self, car, from_link):  # Принимаем доп. аргумент
+        if self.has_room():  # Проверка не помешает
+            self.car = car
+            self.arrived_from_link = from_link  # Сохраняем, откуда приехала
+        else:
+            # Этого не должно происходить, если has_room() проверяется до вызова accept,
+            # но на всякий случай.
+            print(f"[ERROR] Node {self.node_name} не может принять машину, т.к. занят!")
+            car.park()  # Куда-то деть машину
 
     def evacuate(self):
         if self.car:
@@ -92,7 +103,6 @@ class Node:
                 # Выбираем свободную полосу на следующем участке
                 free_lane = next_link.choose_free_lane()
                 # Если участок пуст или последний автомобиль уже отъехал на car_length
-                # if next_link.car_q.len == 0 or next_link.car_q.items[-1].progress >= car_length:
                 if free_lane is not None:
                     # Если полоса пуста или последний автомобиль отъехал на достаточное расстояние
                     if free_lane.queue.len == 0 or free_lane.queue.items[-1].progress >= car_length:
@@ -100,10 +110,16 @@ class Node:
 
                         self.car.progress = 0
                         self.car.avatar.set_position(self.x, self.y)
-                        # next_link.car_q.enqueue(self.car)
                         free_lane.queue.enqueue(self.car)
                         next_link.update_speed()
                         self.car = None
+                    else:
+                        # !!! ЛОГИРУЕМ ПРИЧИНУ НЕВОЗМОЖНОСТИ ВЪЕЗДА !!!
+                        blocker_progress = free_lane.queue.items[-1].progress if free_lane.queue.len > 0 else -1
+                        print(
+                            f"[GRIDLOCK_DEBUG] Узел {self.node_name}: Машина {self.car.serial_number} НЕ МОЖЕТ въехать на {next_link.id} (ЗЕЛЕНЫЙ).")
+                        print(
+                            f"[GRIDLOCK_DEBUG]   Причина: Полоса {free_lane.lane_id} занята. Очередь={free_lane.queue.len}, Прогресс последней машины={blocker_progress:.2f} (нужно >= {car_length})")
                 else:
                     print("Нет свободных полос на участке", next_link.id)
             else:
@@ -118,6 +134,72 @@ class DestinationNode(Node):
             print(f"Машина {self.car.serial_number} достигла конечной точки")
             self.car.park()
             self.car = None
+
+
+class TrafficNode(Node):
+    def __init__(self, *, id_str, x=0, y=0, traffic_light: MultiPhaseTrafficLight, phase_map: dict):
+        """
+        phase_map – словарь, где ключ – номер фазы (например, 1 или 2),
+        а значение – множество идентификаторов участков, для которых сигнал считается зелёным.
+        Например: {1: {"sn-bridge"}, 2: {"other-link"}}
+        """
+        super().__init__(id_str, x, y)
+        self.traffic_light = traffic_light
+        self.phase_map = phase_map
+
+    def dispatch(self):
+        if self.car and self.arrived_from_link:  # Проверяем, что машина и информация о прибытии есть
+            current_phase_index = self.traffic_light.get_phase()
+            # print(f"[LOG DISPATCH] Узел {self.node_name} пытается отправить машину {self.car.serial_number}")
+            print(f"[LOG DISPATCH] Узел {self.node_name}: текущая фаза = {current_phase_index}")
+
+            # Получаем ID линка, С КОТОРОГО прибыла машина
+            incoming_link_id = self.arrived_from_link.id
+
+            # Смотрим в phase_map, разрешен ли ВЪЕЗД С этого линка в текущей фазе
+            allowed_incoming_links = self.phase_map.get(current_phase_index, set())
+
+            if incoming_link_id in allowed_incoming_links:
+                # ДА, въезд с этого направления разрешен (зеленый для приехавших с incoming_link_id)
+                print(
+                    f"[LOG DISPATCH] Узел {self.node_name}: Фаза {current_phase_index}. Въезд с {incoming_link_id} РАЗРЕШЕН.")
+
+                # Теперь определяем, КУДА машина хочет ехать дальше по своему маршруту
+                next_link_outgoing = self.car.route.directions.get(self.node_name)
+
+                if next_link_outgoing is not None:
+                    print(f"[LOG DISPATCH]   Машина {self.car.serial_number} хочет на -> {next_link_outgoing.id}")
+                    # Пытаемся отправить на ЛЮБОЙ разрешенный маршрутом выходной линк,
+                    # проверяя только наличие места на нем.
+                    free_lane = next_link_outgoing.choose_free_lane()
+                    if free_lane is not None:
+                        can_enter_next = free_lane.queue.len == 0 or free_lane.queue.items[-1].progress >= car_length
+                        if can_enter_next:
+                            print(f"[LOG DISPATCH]   Отправлена на {next_link_outgoing.id}, полоса {free_lane.lane_id}")
+                            self.car.progress = 0
+                            self.car.avatar.set_position(self.x, self.y)
+                            free_lane.queue.enqueue(self.car)
+                            next_link_outgoing.update_speed()
+                            self.car = None  # Освобождаем узел
+                            self.arrived_from_link = None  # Сбрасываем инфо о прибытии
+                        else:
+                            print(f"[LOG DISPATCH]   НЕ отправлена. Участок {next_link_outgoing.id} занят у въезда.")
+                            # Машина остается на узле ждать следующей попытки dispatch
+                    else:
+                        print(f"[LOG DISPATCH]   НЕ отправлена. Нет свободных полос на {next_link_outgoing.id}.")
+                else:
+                    print(f"[LOG DISPATCH]   НЕ отправлена. Нет следующего участка в маршруте?")
+
+            else:
+                # НЕТ, въезд с этого направления запрещен (красный для приехавших с incoming_link_id)
+                self.car.waiting_time += 1
+                print(
+                    f"[LOG DISPATCH] Узел {self.node_name}: Фаза {current_phase_index}. Въезд с {incoming_link_id} ЗАПРЕЩЕН (красный). Машина {self.car.serial_number} ждёт ({self.car.waiting_time}).")
+                # Ничего не делаем, машина ждет на узле
+                return  # Явно выходим, т.к. отправка невозможна
+
+        elif self.car and not self.arrived_from_link:
+            print(f"[WARNING] Узел {self.node_name}: Машина есть, но неизвестно, откуда она прибыла!")
 
 
 # Вспомогательная функция для создания точки
@@ -137,11 +219,9 @@ class Link:
         self.destination_node = d_node
         self.open_to_traffic = True
 
-        # self.car_q = Queue(car_queue_size)
         self.lanes = [Lane(lane_id=i, car_queue_size=car_queue_size) for i in range(num_lanes)]
 
         self.congestive = congestive
-        # self.occupancy = self.car_q.len
         # Вычисляем занятость как сумму машин во всех полосах
         self.occupancy = self.get_average_occupancy()
         self.speed = speed_limit
@@ -200,9 +280,11 @@ class Link:
             return False
 
         # Выбираем только те полосы, у которых разница в lane_id равна 1
-        candidate_lanes = [lane for lane in self.lanes if lane is not blocked_lane and not lane.is_blocked and abs(lane.lane_id - blocked_lane.lane_id) == 1]
+        candidate_lanes = [lane for lane in self.lanes if lane is not blocked_lane and not lane.is_blocked and abs(
+            lane.lane_id - blocked_lane.lane_id) == 1]
         if not candidate_lanes:
-            print(f"[LANE CHANGE] Нет соседних незаблокированных полос для участка {self.id} от полосы {blocked_lane.lane_id}")
+            print(
+                f"[LANE CHANGE] Нет соседних незаблокированных полос для участка {self.id} от полосы {blocked_lane.lane_id}")
             return False
 
         # Если несколько кандидатов, выбираем случайно
@@ -214,7 +296,8 @@ class Link:
             while blocked_lane.queue.len > 0:
                 car = blocked_lane.queue.dequeue()
                 target_lane.queue.enqueue(car)
-                print(f"[LANE CHANGE] Машина {car.serial_number} переехала с полосы {blocked_lane.lane_id} на соседнюю полосу {target_lane.lane_id} участка {self.id}")
+                print(
+                    f"[LANE CHANGE] Машина {car.serial_number} переехала с полосы {blocked_lane.lane_id} на соседнюю полосу {target_lane.lane_id} участка {self.id}")
             return True
         else:
             print(f"[LANE CHANGE] Соседняя полоса {target_lane.lane_id} участка {self.id} не готова принять автомобили")
@@ -228,8 +311,6 @@ class Link:
                 continue
 
             if lane.queue.len > 0:
-                # if self.car_q.len > 0:
-                #     first_car = self.car_q.peek(0)
                 first_car = lane.queue.peek(0)
                 first_car.past_progress = first_car.progress
                 first_car.progress = min(self.path_length, first_car.progress + self.speed)
@@ -238,11 +319,9 @@ class Link:
                 first_car.avatar.set_position(car_xy["x"], car_xy["y"])
 
                 # Обновляем положение последующих автомобилей
-                # for i in range(1, self.car_q.len):
+
                 for i in range(1, lane.queue.len):
-                    # leader = self.car_q.peek(i - 1)
                     leader = lane.queue.peek(i - 1)
-                    # follower = self.car_q.peek(i)
                     follower = lane.queue.peek(i)
                     follower.past_progress = follower.progress
                     follower.progress = min(follower.progress + self.speed, leader.progress - car_length)
@@ -251,15 +330,10 @@ class Link:
                     follower.avatar.set_position(car_xy["x"], car_xy["y"])
 
                 if first_car.progress >= self.path_length and self.destination_node.has_room():
-                    # self.destination_node.accept(self.car_q.dequeue())
-                    self.destination_node.accept(lane.queue.dequeue())
+                    dequeued_car = lane.queue.dequeue()
+                    # Передаем и машину, и сам линк (self)
+                    self.destination_node.accept(car=dequeued_car, from_link=self)
                 self.update_speed()
-
-    # def evacuate(self):
-    #     while self.car_q.len > 0:
-    #         c = self.car_q.dequeue()
-    #         c.park()
-    #     self.update_speed()
 
     def evacuate(self):
         """Очищает дорогу от машин"""
@@ -329,13 +403,11 @@ class Route:
     def calc_travel_time(self):
         if speed_mode == "theoretical":
             if traffic_light_on:
-                self.calc_travel_time_theoretical_with_traffic_lights()
+                self.calc_travel_time_theoretical_with_lights()
             else:
                 self.calc_travel_time_theoretical()
         elif speed_mode == "actual":
             if traffic_light_on:
-                self.calc_travel_time_actual_with_traffic_lights()
-            else:
                 self.calc_travel_time_actual()
         else:
             self.calc_travel_time_historical()
@@ -345,24 +417,155 @@ class Route:
         print(f"[LOG ROUTE TIME CALC] Маршрут {self.label}:")
         for link in self.itinerary:
             tt += link.travel_time
-            print(f"[LOG ROUTE TIME CALC]   Участок {link.id}: длина={link.path_length}, скорость={link.speed}, время={link.travel_time}")
+            print(
+                f"[LOG ROUTE TIME CALC]   Участок {link.id}: длина={link.path_length}, скорость={link.speed}, время={link.travel_time}")
         self.travel_time = tt
 
+    def calc_travel_time_theoretical_with_lights(self):
+        """
+        Рассчитывает теоретическое время в пути, С УЧЕТОМ
+        оценки задержек на светофорах (TrafficNode), управляемых
+        MultiPhaseTrafficLight, где фазы разрешают ВЪЕЗД С определенных линков.
+        """
+        tt = 0  # Общее расчётное время
+        traffic_light_node_count = 0  # Счётчик узлов со светофорами
+        print(f"[LOG ROUTE TIME W/ LIGHTS v2] Расчет для маршрута {self.label}:")
+
+        # Итерируем по участкам маршрута с использованием индекса
+        for i, current_link in enumerate(self.itinerary):
+            # 1. Добавляем время движения по самому участку
+            link_time = current_link.travel_time
+            tt += link_time
+            print(
+                f"[LOG ROUTE TIME W/ LIGHTS v2]   Участок {current_link.id} (Длина: {current_link.path_length:.0f}, Скорость: {current_link.speed:.2f}): Время движения = {link_time:.2f}")
+
+            # 2. Проверяем узел НАЗНАЧЕНИЯ текущего участка - ЗДЕСЬ БУДЕТ СВЕТОФОР
+            destination_node = current_link.destination_node
+
+            # 3. Проверяем, является ли этот узел светофором
+            #    И не является ли он последним узлом маршрута (не считаем ожидание в самом конце)
+            is_last_link = (i == len(self.itinerary) - 1)
+
+            if isinstance(destination_node, TrafficNode) and \
+                    hasattr(destination_node, 'traffic_light') and \
+                    hasattr(destination_node.traffic_light, 'phase_durations') and \
+                    not is_last_link:
+
+                traffic_light_node_count += 1
+                print(
+                    f"[LOG ROUTE TIME W/ LIGHTS v2]     -> Узел {destination_node.node_name}: Светофор #{traffic_light_node_count}")
+
+                # Определяем линк, ПО КОТОРОМУ машина прибыла к этому узлу
+                # current_link - это и есть тот линк, с которого машина въезжает на destination_node
+                incoming_link_id = current_link.id
+
+                # Получаем объект светофора и карту фаз узла
+                light = destination_node.traffic_light
+                phase_map = destination_node.phase_map
+
+                # --- Оценка ожидания на основе разрешения для ВХОДЯЩЕГО линка ---
+                estimated_wait = 0
+                green_phase_index = -1
+                red_duration = 0
+                total_cycle_time = sum(light.phase_durations) if light.phase_durations else 0
+
+                if total_cycle_time <= 0:
+                    print(f"[WARNING] Маршрут {self.label}: Что-то не так у узла {destination_node.node_name}")
+                else:
+                    # Ищем ИНДЕКС фазы, которая разрешает ВЪЕЗД С нашего incoming_link_id
+                    for idx, allowed_incoming_links in phase_map.items():
+                        if not isinstance(idx, int) or idx < 0 or idx >= light.num_phases:
+                            print(
+                                f"[WARNING] Маршрут {self.label}: Неверный индекс фазы '{idx}' в phase_map узла {destination_node.node_name}.")
+                            continue
+                        if incoming_link_id in allowed_incoming_links:
+                            green_phase_index = idx
+                            break  # Нашли
+
+                    if green_phase_index != -1:
+                        # Нашли зеленую фазу для въезда с нашего направления
+                        green_duration = light.phase_durations[green_phase_index]
+                        if green_duration >= total_cycle_time:
+                            red_duration = 0
+                        else:
+                            red_duration = total_cycle_time - green_duration
+
+                        estimated_wait = red_duration / 2.0
+                        print(
+                            f"[LOG ROUTE TIME W/ LIGHTS v2]       Въезд с -> {incoming_link_id}: Зеленая фаза (индекс)={green_phase_index}, Длит. красного={red_duration}, Цикл={total_cycle_time}, Ожидание ~{estimated_wait:.2f}")
+                    else:
+                        # Въезд с нашего направления не разрешен ни в одной фазе!
+                        print(
+                            f"[WARNING] Маршрут {self.label}: Въезд с '{incoming_link_id}' на узел '{destination_node.node_name}' не найден ни в одной фазе phase_map!")
+                        estimated_wait = 0
+                        print(
+                            f"[LOG ROUTE TIME W/ LIGHTS v2]       Въезд с -> {incoming_link_id}: НАПРАВЛЕНИЕ НЕ НАЙДЕНО В PHASE_MAP! Ожидание = 0")
+
+                tt += estimated_wait
+
+        print(
+            f"[LOG ROUTE TIME W/ LIGHTS v2] Маршрут {self.label}: Найдено светофоров = {traffic_light_node_count}, Итоговое теор. время ~ {tt:.2f}")
+        self.travel_time = tt
 
     def calc_travel_time_actual(self):
-        n = 0
-        total_tt = 0
-        for c in car_array:
-            if c and c.route == self and c.odometer > 0 and (global_clock - c.depart_time) != 0:
-                v = (c.odometer / (global_clock - c.depart_time)) * speed_limit
-                tt = self.route_length / v if v != 0 else float('inf')
-                total_tt += tt
-                n += 1
-        if n == 0:
-            self.travel_time = self.route_length / speed_limit
-        else:
-            self.travel_time = total_tt / n
+        """
+        Рассчитывает ВРЕМЯ в пути на основе СРЕДНЕЙ СКОРОСТИ
+        машин, ФАКТИЧЕСКИ находящихся на данном маршруте.
+        Задержки (из-за заторов И светофоров) УЧИТЫВАЮТСЯ НЕЯВНО
+        через снижение средней скорости наблюдавшихся машин.
+        """
+        n = 0  # Количество машин, по которым усредняем
+        total_tt = 0  # Сумма расчетных времен для усреднения
+        # print(f"[DEBUG] Calculating ACTUAL time for route {self.label} at clock {global_clock}")
 
+        for car in car_array:
+            # Ищем машины, которые СЕЙЧАС на ЭТОМ маршруте, УЖЕ ПРОЕХАЛИ что-то (>0),
+            # и находятся в пути ненулевое время (>0)
+            if (car and car.route == self and
+                    car.odometer > 0):  # Проверяем, что машина вообще двигалась
+
+                elapsed_time = global_clock - car.depart_time
+                if elapsed_time > 0:  # Проверяем, что прошло время с момента старта
+
+                    # Рассчитываем СРЕДНЮЮ скорость этой машины за все время ее пути
+                    # УБИРАЕМ некорректное умножение на speed_limit
+                    average_speed = car.odometer / elapsed_time
+                    # print(f"[DEBUG]   Car {car.serial_number}: odometer={car.odometer:.1f}, time={elapsed_time:.1f}, avg_speed={average_speed:.2f}")
+
+                    # Оцениваем ПОЛНОЕ время пути для этой машины,
+                    # экстраполируя ее прошлую среднюю скорость на всю длину маршрута.
+                    # Если средняя скорость была > 0, время будет конечным.
+                    # Случай average_speed == 0 отсекается условием car.odometer > 0
+                    estimated_total_time_for_car = self.route_length / average_speed
+                    # print(f"[DEBUG]     Estimated TT for car: {estimated_total_time_for_car:.2f}")
+
+                    total_tt += estimated_total_time_for_car
+                    n += 1
+                # else: # Debugging: Car hasn't been running for any time yet or departed in the future?
+                #    print(f"[DEBUG]   Car {car.serial_number}: elapsed_time <= 0")
+            # else: # Debugging: Car not on this route or odometer is 0
+            # if car and car.route == self:
+            #    print(f"[DEBUG]   Car {car.serial_number}: odometer=0")
+
+        if n == 0:
+            # Если нет машин на маршруте для оценки (или они еще не двигались),
+            # используем теоретическое время без загрузки или оценку из theoretical_with_lights?
+            # Пока оставим простое теоретическое.
+            # print(f"[WARN] calc_travel_time_actual для {self.label}: Нет данных по движущимся машинам, используем теор. скорость.")
+            # Альтернатива: вызвать теоретический расчет с учетом светофоров, если они включены
+            if traffic_light_on:
+                # Вычисляем теоретическое с ожиданием, чтобы иметь хоть какую-то оценку
+                # Это рекурсивный вызов, если calc_travel_time вызывает его же.
+                # Лучше просто скопировать логику или сделать отдельную функцию
+                # Проще всего - использовать базовое теоретическое время.
+                self.travel_time = self.route_length / speed_limit  # Самый простой fallback
+            else:
+                self.travel_time = self.route_length / speed_limit
+
+        else:
+            # Усредняем оцененное время по всем наблюдавшимся машинам
+            self.travel_time = total_tt / n
+            # print(f"[DEBUG] calc_travel_time_actual для {self.label}: n={n}, total_tt={total_tt:.2f}, final avg_tt={self.travel_time:.2f}")
 
     def calc_travel_time_historical(self):
         if dashboard.counts.get(self.label, 0) == 0:
@@ -371,30 +574,34 @@ class Route:
             self.travel_time = dashboard.times[self.label] / dashboard.counts[self.label]
 
 
-# Создаем светофор с фазами (например, фаза 1 длится 30 шагов, фаза 2 – 30 шагов)
-# Создаем два отдельных светофора
-north_signal = TrafficLight(phase1_duration=30, phase2_duration=30)
-south_signal = TrafficLight(phase1_duration=30, phase2_duration=30)
+# Фаза 0: Зеленый для подходов A и a (въезд на мосты)
+# Фаза 1: Все красные (пауза)
+# Фаза 2: Зеленый для подходов sn-bridge и ns-bridge (выезд с мостов)
+# Фаза 3: Все красные (пауза)
+phase_times = [15, 5, 15, 5]  # Примерные длительности
+traffic_signal = MultiPhaseTrafficLight(phase_times)
 
-# Настраиваем фазовую карту для узла south:
-# В фазе 1 зелёный для "sn-bridge", в фазе 2 зелёный для, скажем, "other-link"
+# Карты фаз теперь указывают РАЗРЕШЕННЫЕ ВХОДЯЩИЕ линки
 south_phase_map = {
-    1: {"sn-bridge"},
-    2: {"B"}
+    0: {"a"},  # В фазе 0 можно въехать С 'a'
+    1: set(),  # В фазе 1 въезд запрещен всем
+    2: {"ns-bridge"},  # В фазе 2 можно въехать С 'ns-bridge'
+    3: set()  # В фазе 3 въезд запрещен всем
 }
 
 north_phase_map = {
-    1: {"ns-bridge"},
-    2: {"b"}
+    0: {"A"},  # В фазе 0 можно въехать С 'A'
+    1: set(),  # В фазе 1 въезд запрещен всем
+    2: {"sn-bridge"},  # В фазе 2 можно въехать С 'sn-bridge'
+    3: set()  # В фазе 3 въезд запрещен всем
 }
 
 # Создаём узлы (с произвольными координатами)
 orig = Node("orig", x=0, y=0)
 dest = DestinationNode("dest", x=100, y=0)
 if traffic_light_on:
-    # south = TrafficNode(id_str="south", x=50, y=50, traffic_light=south_signal, phase_map=south_phase_map)
-    # north = TrafficNode(id_str="north", x=50, y=-50, traffic_light=north_signal, phase_map=north_phase_map)
-    pass
+    south = TrafficNode(id_str="south", x=50, y=50, traffic_light=traffic_signal, phase_map=south_phase_map)
+    north = TrafficNode(id_str="north", x=50, y=-50, traffic_light=traffic_signal, phase_map=north_phase_map)
 else:
     south = Node("south", x=50, y=50)
     north = Node("north", x=50, y=-50)
@@ -407,9 +614,9 @@ b_link = CongestibleLink(id_str="b", o_node=north, d_node=dest, path_length=270,
 # B_link = Link(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
 B_link = CongestibleLink(id_str="B", o_node=south, d_node=dest, path_length=500, num_lanes=3)
 # sn_link = Link(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=1)
-sn_link = CongestibleLink(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=1)
+sn_link = CongestibleLink(id_str="sn-bridge", o_node=south, d_node=north, path_length=40, num_lanes=3)
 # ns_link = Link(id_str="ns-bridge", o_node=north, d_node=south, path_length=40, num_lanes=1)
-ns_link = CongestibleLink(id_str="ns-bridge", o_node=north, d_node=south, path_length=40, num_lanes=1)
+ns_link = CongestibleLink(id_str="ns-bridge", o_node=north, d_node=south, path_length=40, num_lanes=3)
 
 sn_link.open_to_traffic = False
 ns_link.open_to_traffic = False
@@ -641,16 +848,19 @@ def launch_car():
         next_car.avatar.set_fill(next_car.route.paint_color)
         next_car.avatar.set_position(orig.x, orig.y)
         next_car.avatar.set_display("block")
-        orig.accept(next_car)
+        orig.accept(car=next_car, from_link=None)
         dashboard.record_departure()
         next_departure = global_clock + launch_timer(launch_rate / speed_limit)
+
 
 # Список текущих дорожных событий (ремонтов)
 road_events = []
 
+
 def update_road_events(current_time):
     for event in road_events:
         event.update(current_time)
+
 
 def schedule_random_repair(current_time):
     # Выбираем случайный участок из списка участков
@@ -667,7 +877,8 @@ def schedule_random_repair(current_time):
         duration = random.randint(10, 50)
         event = RoadEvent(link=link, lane=lane, start_time=start_time, duration=duration)
         road_events.append(event)
-        print(f"[ROAD EVENT] Запланирован ремонт на участке {link.id}, полоса {lane.lane_id} начиная с такта {start_time} на {duration} тактов")
+        print(
+            f"[ROAD EVENT] Запланирован ремонт на участке {link.id}, полоса {lane.lane_id} начиная с такта {start_time} на {duration} тактов")
 
 
 def step():
@@ -682,11 +893,11 @@ def step():
         if random.random() < 0.05:
             schedule_random_repair(global_clock)
 
-
     # Обновляем светофор(ы) для узлов с сигналами
     if traffic_light_on:
-        for node in [south, north]:
-            node.traffic_light.update()
+        # Передаем реальный шаг времени симуляции
+        time_increment = speed_limit
+        traffic_signal.update(time_step=time_increment)
 
     if num_of_steps == 69:
         pass
