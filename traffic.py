@@ -18,11 +18,11 @@ from road_event import RoadEvent
 
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
-bridge_blocked = True
+bridge_blocked = False
 traffic_light_on = False
 road_events_on = False
 routing_mode = "selfish"  # или "random", "selfish"
-speed_mode = "theoretical"  # альтернативы: "actual", "historical", "theoretical"
+speed_mode = "historical"  # альтернативы: "actual", "historical", "theoretical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
@@ -58,7 +58,7 @@ RESULTS_CSV_FILE = 'resources\\simulation_log.csv'
 
 # Заголовки столбцов для CSV файла (соответствуют вашему описанию)
 CSV_HEADER = [
-    "Run ID", "Режим Скорости", "Метод Выбора", "Светофоры", "Фазы (Длит-ти)",
+    "Run ID", "Режим Скорости", "Метод Выбора", "Светофоры", "Фазы (Длит-ти)", "Случ-е События",
     "Мосты", "Интенс-ть", "Коэф. Сопрот-я", "Итог Запуска", "Шаги", "Выехало", "Приехало",
     "Ab Кол-во", "aB Кол-во", "AB Кол-во", "ab Кол-во",
     "Ab Ср. Время (норм.)", "aB Ср. Время (норм.)", "AB Ср. Время (норм.)", "ab Ср. Время (норм.)",
@@ -1004,6 +1004,7 @@ def log_results_to_csv(outcome, final_steps):
     selection_method_val = selection_method if routing_mode == 'selfish' else 'N/A'  # Метод релевантен только для selfish
     traffic_light_val = "Вкл" if traffic_light_on else "Выкл"
     phase_times_str = str(phase_times) if traffic_light_on else "N/A"
+    road_events_val = "Да" if traffic_light_on else "Нет"
     bridge_blocked_val = "Закрыты" if bridge_blocked else "Открыты"
     launch_rate_val = launch_rate
     congestion_coef_val = congestion_coef
@@ -1028,7 +1029,7 @@ def log_results_to_csv(outcome, final_steps):
 
     # --- Формирование строки данных ---
     data_row = [
-        run_id, speed_mode_val, selection_method_val, traffic_light_val, phase_times_str,
+        run_id, speed_mode_val, selection_method_val, traffic_light_val, phase_times_str, road_events_val,
         bridge_blocked_val, launch_rate_val, congestion_coef_val, run_outcome, steps_val, departures, arrivals,
         counts.get("Ab", 0), counts.get("aB", 0), counts.get("AB", 0), counts.get("ab", 0),
         norm_times.get("Ab", "N/A"), norm_times.get("aB", "N/A"), norm_times.get("AB", "N/A"),
@@ -1116,8 +1117,6 @@ def step():
 
     orig.dispatch()
     launch_car()
-    # orig.dispatch()
-    # launch_car()
     # Для отладки можно раскомментировать:
     # car_census(9)
     global_clock += speed_limit
