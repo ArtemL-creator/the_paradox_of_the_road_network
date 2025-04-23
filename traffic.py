@@ -6,6 +6,7 @@ from random import choice
 import csv  # <-- Добавлено
 import os  # <-- Добавлено
 from datetime import datetime  # <-- Добавлено
+import argparse
 
 from lane import Lane
 from queue import Queue
@@ -16,13 +17,14 @@ from road_event import RoadEvent
 # from PyQt5.QtWidgets import QApplication
 # from index_pyqt5 import TrafficApp
 
+
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
 bridge_blocked = False
 traffic_light_on = False
 road_events_on = False
 routing_mode = "selfish"  # или "random", "selfish"
-speed_mode = "historical"  # альтернативы: "actual", "historical", "theoretical"
+speed_mode = "theoretical"  # альтернативы: "actual", "historical", "theoretical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
@@ -59,11 +61,76 @@ RESULTS_CSV_FILE = 'resources\\simulation_log.csv'
 # Заголовки столбцов для CSV файла (соответствуют вашему описанию)
 CSV_HEADER = [
     "Run ID", "Режим Скорости", "Метод Выбора", "Светофоры", "Фазы (Длит-ти)", "Случ-е События",
-    "Мосты", "Интенс-ть", "Коэф. Сопрот-я", "Итог Запуска", "Шаги", "Выехало", "Приехало",
+    "Мост", "Интенс-ть", "Коэф. Сопрот-я", "Итог Запуска", "Шаги", "Выехало", "Приехало",
     "Ab Кол-во", "aB Кол-во", "AB Кол-во", "ab Кол-во",
     "Ab Ср. Время (норм.)", "aB Ср. Время (норм.)", "AB Ср. Время (норм.)", "ab Ср. Время (норм.)",
     "Total Кол-во", "Total Ср. Время (норм.)"
 ]
+
+# --- Парсер аргументов командной строки ---
+# Этот код НАСТРАИВАЕТ парсер и ЧИТАЕТ аргументы.
+# Он не заменяет глобальные переменные напрямую, только дает ВОЗМОЖНОСТЬ их перезаписать.
+parser = argparse.ArgumentParser(description='Traffic Simulation with configurable parameters.')
+
+# Определяем аргументы, которые мы хотим принимать из командной строки
+# Указываем type для автоматического преобразования типов
+parser.add_argument('--congestion_coef', type=float, help='Global launch rate (e.g., 0.55).')
+parser.add_argument('--launch_rate', type=float, help='Global launch rate (e.g., 0.55).')
+parser.add_argument('--bridge_blocked', type=str, choices=['True', 'False'],
+                    help='Bridge blocked state (True or False).')
+parser.add_argument('--traffic_light_on', type=str, choices=['True', 'False'],
+                    help='Traffic light state (True or False).')
+parser.add_argument('--road_events_on', type=str, choices=['True', 'False'], help='Road events state (True or False).')
+parser.add_argument('--routing_mode', type=str, choices=['selfish', 'random'], help='Routing mode (selfish or random).')
+parser.add_argument('--speed_mode', type=str, choices=['historical', 'actual', 'theoretical'],
+                    help='Speed calculation mode (historical, actual, or theoretical).')
+parser.add_argument('--selection_method', type=str, choices=['minimum', 'weighted-probability'],
+                    help='Route selection method (minimum or weighted-probability), relevant for selfish routing.')
+parser.add_argument('--max_cars', type=int, help='Maximum number of cars to launch before stopping.')
+
+# Читаем аргументы, переданные при запуске скрипта
+args = parser.parse_args()
+
+# --- Перезаписываем глобальные переменные, если соответствующий аргумент был передан ---
+# Здесь мы проверяем, есть ли аргумент, и если да, используем его значение.
+# Если аргумента нет, остается значение по умолчанию, определенное выше.
+if args.congestion_coef is not None:
+    congestion_coef = args.congestion_coef
+    print(f"[Config] Launch Rate set to: {congestion_coef}")
+
+if args.launch_rate is not None:
+    launch_rate = args.launch_rate
+    print(f"[Config] Launch Rate set to: {launch_rate}")
+
+# Для булевых значений, переданных как строки 'True'/'False', нужно их преобразовать в Python булевы
+if args.bridge_blocked is not None:
+    bridge_blocked = args.bridge_blocked.lower() == 'true'
+    print(f"[Config] Bridge Blocked set to: {bridge_blocked}")
+
+if args.traffic_light_on is not None:
+    traffic_light_on = args.traffic_light_on.lower() == 'true'
+    print(f"[Config] Traffic Light On set to: {traffic_light_on}")
+
+if args.road_events_on is not None:
+    road_events_on = args.road_events_on.lower() == 'true'
+    print(f"[Config] Road Events On set to: {road_events_on}")
+
+# Для строковых значений просто присваиваем, если аргумент был передан
+if args.routing_mode is not None:
+    routing_mode = args.routing_mode
+    print(f"[Config] Routing Mode set to: {routing_mode}")
+
+if args.speed_mode is not None:
+    speed_mode = args.speed_mode
+    print(f"[Config] Speed Mode set to: {speed_mode}")
+
+if args.selection_method is not None:
+    selection_method = args.selection_method
+    print(f"[Config] Selection Method set to: {selection_method}")
+
+if args.max_cars is not None:
+    max_cars = args.max_cars
+    print(f"[Config] Max Cars set to: {max_cars}")
 
 
 # Функции распределения
@@ -984,7 +1051,7 @@ def check_for_gridlock(current_step):
 
             model_state = "stopped"
             # --- ВЫЗОВ ЛОГГИРОВАНИЯ ПЕРЕД ВЫХОДОМ ---
-            log_results_to_csv("Deadlock", current_step)
+            #log_results_to_csv("Deadlock", current_step)
             # --- КОНЕЦ ВЫЗОВА ---
             sys.exit(f"Симуляция остановлена из-за обнаружения устойчивого гридлока (отсутствие прогресса).")
 
@@ -1001,11 +1068,11 @@ def log_results_to_csv(outcome, final_steps):
 
     # --- Сбор параметров ---
     speed_mode_val = speed_mode
-    selection_method_val = selection_method if routing_mode == 'selfish' else 'N/A'  # Метод релевантен только для selfish
+    selection_method_val = selection_method if routing_mode == 'selfish' else routing_mode  # Метод релевантен только для selfish
     traffic_light_val = "Вкл" if traffic_light_on else "Выкл"
     phase_times_str = str(phase_times) if traffic_light_on else "N/A"
     road_events_val = "Да" if traffic_light_on else "Нет"
-    bridge_blocked_val = "Закрыты" if bridge_blocked else "Открыты"
+    bridge_blocked_val = "Закрыт" if bridge_blocked else "Открыт"
     launch_rate_val = launch_rate
     congestion_coef_val = congestion_coef
 
