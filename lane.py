@@ -1,4 +1,4 @@
-from queue import Queue
+from sim_queue import Queue
 
 class Lane:
     def __init__(self, *, lane_id: int, car_queue_size: int):

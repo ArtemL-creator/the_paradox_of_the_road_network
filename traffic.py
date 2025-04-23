@@ -9,7 +9,7 @@ from datetime import datetime  # <-- Добавлено
 import argparse
 
 from lane import Lane
-from queue import Queue
+from sim_queue import Queue
 from multi_phase_traffic_light import MultiPhaseTrafficLight
 from avatar import Avatar
 from road_event import RoadEvent
