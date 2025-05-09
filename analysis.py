@@ -172,8 +172,8 @@ if not analysis_df.empty:
     # Используем правильные имена столбцов из DataFrame
     sns.scatterplot(
         data=analysis_df,
-        x='Интенс-ть_rounded',
-        # x='Коэф. Сопрот-я_rounded',
+        # x='Интенс-ть_rounded',
+        x='Коэф. Сопрот-я_rounded',
         y='Разница_Время_(Открыт - Закрыт)',
         hue='Метод Выбора', # ИСПРАВЛЕНО: Использовать имя столбца из данных
         style='Режим Скорости', # Это имя столбца по CSV
@@ -183,12 +183,12 @@ if not analysis_df.empty:
 
     plt.axhline(0, color='grey', linestyle='--', linewidth=0.8) # Линия на уровне 0 для визуализации разницы
     plt.title('Влияние Интенсивности на разницу времени (Открыт - Закрыт) по режимам')
-    # plt.title('Влияние Коэффициента Сопротивления на разницу времени (Открыт - Закрыт) по режимам')
-    plt.xlabel(f'Интенсивность запуска (округлено до {ROUND_DECIMALS} знаков)')
-    # plt.xlabel(f'Коэффициент сопротивления (округлено до {ROUND_DECIMALS} знаков)')
+    plt.title('Влияние Коэффициента Сопротивления на разницу времени (Открыт - Закрыт) по режимам')
+    # plt.xlabel(f'Интенсивность запуска (округлено до {ROUND_DECIMALS} знаков)')
+    plt.xlabel(f'Коэффициент сопротивления (округлено до {ROUND_DECIMALS} знаков)')
     plt.ylabel('Разница в нормализованном среднем времени (Время_Открыт - Время_Закрыт)')
     plt.grid(True, which='both', linestyle=':', linewidth=0.5)
-    plt.legend(title='Метод Выбора', bbox_to_anchor=(1.05, 1), loc='upper left') # Настройка легенды
+    plt.legend(title='Обозначения:', bbox_to_anchor=(1.05, 1), loc='upper left') # Настройка легенды
     plt.tight_layout() # Автоматическая настройка отступов
     plt.show()
 else:
