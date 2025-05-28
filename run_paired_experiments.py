@@ -5,14 +5,15 @@ import sys
 import os
 
 # --- Настройки автоматизации ---
-# Укажите путь к вашему основному скрипту симуляции
+# Путь к основному скрипту симуляции
 SIMULATION_SCRIPT = 'traffic.py'  # Замените на реальное имя файла
 # Имя файла для сохранения результатов
 RESULTS_CSV_FILE = 'resources\\simulation_log.csv'
 
 # Количество ПАР запусков (т.е. сколько раз будут сгенерированы УНИКАЛЬНЫЕ случайные параметры для пары мост закрыт/мост открыт)
 # Общее количество симуляций будет N_PAIRS * 2
-N_PAIRS = 200  # Задайте желаемое количество пар запусков (т.е. 50 с закрытым мостом и 50 с открытым)
+N_PAIRS = 250 # Количество пар запусков
+is_writing = True
 
 # Определение диапазонов или списков возможных значений для случайного выбора
 # Исключаем 'bridge_blocked' из этого списка, так как он будет перебираться явно
@@ -23,10 +24,8 @@ parameter_generation_rules = {
     'road_events_on': [True, False],  # Случайный выбор из [True, False]
     'routing_mode': ["selfish", "random"],  # Случайный выбор из ["selfish", "random"]
     'speed_mode': ["theoretical", "actual", "historical"],
-    # Случайный выбор из ["historical", "actual", "theoretical"] - выбрал 2 для примера
-    'selection_method': ["minimum", "weighted-probability"],  # Случайный выбор из [..., ...] (актуально для selfish)
-    # Добавьте другие параметры, которые должны быть одинаковыми для пары, но случайными между парами
-    # ,
+    # Случайный выбор из ["historical", "actual", "theoretical"]
+    'selection_method': ["minimum", "weighted-probability"],  # Случайный выбор из ["minimum", "weighted-probability"] (актуально для selfish)
 }
 
 # Пауза между отдельными запусками симуляции (в секундах)
@@ -66,6 +65,10 @@ for pair_index in range(N_PAIRS):
 
         # Формируем команду для вызова скрипта симуляции
         command = [sys.executable, SIMULATION_SCRIPT]
+
+        # ЯВНО добавляем параметр is_writing для текущего состояния в паре
+        command.append('--is_writing')
+        command.append(str(is_writing))  # Передаем 'True' или 'False' как строку
 
         # Добавляем базовые случайные параметры, сгенерированные для этой пары
         for param_name, param_value in base_random_params.items():
@@ -112,4 +115,5 @@ print("-" * 30)
 print("Автоматизация завершена.")
 print(f"Всего запланировано запусков (пар * 2): {N_PAIRS * 2}")
 print(f"Успешно завершенных запусков: {successful_runs}")
-print(f"Результаты записаны в файл {RESULTS_CSV_FILE} (если логгирование включено в скрипте симуляции).")
+if is_writing:
+    print(f"Результаты записаны в файл {RESULTS_CSV_FILE} (если логгирование включено в скрипте симуляции).")

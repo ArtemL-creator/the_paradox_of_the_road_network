@@ -14,15 +14,11 @@ from multi_phase_traffic_light import MultiPhaseTrafficLight
 from avatar import Avatar
 from road_event import RoadEvent
 
-# from PyQt5.QtWidgets import QApplication
-# from index_pyqt5 import TrafficApp
-
-
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
 bridge_blocked = False
 traffic_light_on = False
-road_events_on = False
+road_events_on = True
 routing_mode = "selfish"  # или "random", "selfish"
 speed_mode = "theoretical"  # альтернативы: "actual", "historical", "theoretical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
@@ -30,6 +26,9 @@ launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
 next_departure = 0  # следующий такт, когда можно отправить автомобиль
 max_cars = 1500  # float("inf")         # если не задано – не ограничено
+
+# Переменная для записи в файл
+is_writing = True
 
 car_radius = 3
 car_length = 2 * car_radius
@@ -88,6 +87,8 @@ parser.add_argument('--selection_method', type=str, choices=['minimum', 'weighte
                     help='Route selection method (minimum or weighted-probability), relevant for selfish routing.')
 parser.add_argument('--max_cars', type=int, help='Maximum number of cars to launch before stopping.')
 
+parser.add_argument('--is_writing', type=str, choices=['True', 'False'], help='Writing to a file (True or False).')
+
 # Читаем аргументы, переданные при запуске скрипта
 args = parser.parse_args()
 
@@ -131,6 +132,10 @@ if args.selection_method is not None:
 if args.max_cars is not None:
     max_cars = args.max_cars
     print(f"[Config] Max Cars set to: {max_cars}")
+
+if args.is_writing is not None:
+    is_writing = args.is_writing
+    print(f"[Config] Writing to a file set to: {is_writing}")
 
 
 # Функции распределения
@@ -439,7 +444,7 @@ class CongestibleLink(Link):
     def update_speed(self):
         epsilon = 1e-10
         self.occupancy = self.get_average_occupancy()  # Средняя загруженность на полосу
-        density_factor = self.occupancy / car_queue_size  # Плотность загруженности (0 - 1)
+        # density_factor = self.occupancy / car_queue_size  # Плотность загруженности (0 - 1)
         dynamic_congestion_coef = congestion_coef * (1 - (len(self.lanes) - 1) * 0.1)
         dynamic_congestion_coef = max(dynamic_congestion_coef, 0.1)  # Ограничение снизу
         self.speed = speed_limit - (
@@ -1071,7 +1076,7 @@ def log_results_to_csv(outcome, final_steps):
     selection_method_val = selection_method if routing_mode == 'selfish' else routing_mode  # Метод релевантен только для selfish
     traffic_light_val = "Вкл" if traffic_light_on else "Выкл"
     phase_times_str = str(phase_times) if traffic_light_on else "N/A"
-    road_events_val = "Да" if traffic_light_on else "Нет"
+    road_events_val = "Да" if road_events_on else "Нет"
     bridge_blocked_val = "Закрыт" if bridge_blocked else "Открыт"
     launch_rate_val = launch_rate
     congestion_coef_val = congestion_coef
@@ -1240,23 +1245,13 @@ def animate():
         if final_outcome == "OK" or final_outcome == "Stopped Externally":
             # Записываем лог только для известных успешных или штатных остановок,
             # т.к. deadlock должен был записаться сам перед sys.exit()
-            log_results_to_csv(final_outcome, steps_at_end)
+            if is_writing:
+                log_results_to_csv(final_outcome, steps_at_end)
         elif final_outcome == "Unknown":
             # Попытка записать лог при неожиданном завершении
-            print("[Animate Warning] Цикл завершился неожиданно. Попытка записать лог.")
-            log_results_to_csv("Abnormal Exit", steps_at_end)
-
-
-# def go_stop_button():
-#     global model_state
-#     if model_state == "stopped":
-#         model_state = "running"
-#         main_window.go_button.setText("Stop")
-#         animate()
-#     elif model_state == "running":
-#         model_state = "stopping"
-#         main_window.go_button.setText("Wait")
-#         main_window.go_button.setDisabled(True)
+            if is_writing:
+                print("[Animate Warning] Цикл завершился неожиданно. Попытка записать лог.")
+                log_results_to_csv("Abnormal Exit", steps_at_end)
 
 
 def init():
@@ -1282,10 +1277,5 @@ def init():
 
 if __name__ == "__main__":
     model_state = "running"
-    # app = QApplication(sys.argv)
-    # main_window = TrafficApp()
     init()
-    # main_window.go_button.clicked.connect(go_stop_button)
-    # main_window.show()
-    # sys.exit(app.exec_())
     animate()
