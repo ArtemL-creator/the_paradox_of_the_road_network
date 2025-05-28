@@ -61,6 +61,14 @@ if len(df_cleaned) == 0:
 X_raw = df_cleaned[FEATURE_COLUMNS].copy()
 y = df_cleaned[TARGET_COLUMN].copy()
 
+# Получаем категории из обучающих данных (df_cleaned)
+# Это нужно сделать один раз после загрузки и начальной очистки df_cleaned
+categories_map = {}
+for col in FEATURE_COLUMNS:
+    if df_cleaned[col].dtype == 'object':
+        categories_map[col] = df_cleaned[col].unique().tolist()
+        print(f"Категории для '{col}': {categories_map[col]}")
+
 # Преобразуем категориальные признаки в числовой формат с помощью One-Hot Encoding
 # drop_first=True удаляет первый столбец для каждой категории, избегая избыточности (мультиколлинеарности) для линейных моделей
 X = pd.get_dummies(X_raw, columns=[col for col in FEATURE_COLUMNS if X_raw[col].dtype == 'object'], drop_first=True)
@@ -118,29 +126,43 @@ print(f"Коэффициент детерминации (R-squared): {r2:.4f}")
 # - MSE/RMSE: Средняя ошибка прогноза в единицах целевой переменной. RMSE легче интерпретировать, он в тех же единицах, что и время.
 # - R-squared: Доля дисперсии (разброса) целевой переменной, объясняемая моделью. Значение от 0 до 1. Чем ближе к 1, тем лучше модель "улавливает" зависимости в данных. Если R-squared близок к 0, модель не сильно лучше простого предсказания среднего значения.
 
-# --- Пример использования обученной модели для нового прогноза ---
-print("\n--- Пример прогноза для новой ситуации ---")
+# --- Пример прогноза для НОВОЙ ситуации ---
+print("\n--- Пример прогноза для НОВОЙ ситуации ---")
 
-# Создайте DataFrame с новыми параметрами.
-# Важно! Колонки должны быть ТОЧНО такие же, как в X (с one-hot кодированием и т.д.)
-# Самый надежный способ - создать DataFrame с исходными параметрами и прогнать его через pd.get_dummies с теми же колонками, что и для обучения
-example_data_raw = pd.DataFrame([{
-    'Режим Скорости': 'historical',
-    'Метод Выбора': 'selfish',
-    'Светофоры': 'Вкл',
-    'Случ-е События': 'Нет',
-    'Мост': 'Открыт',
+example_data_raw_v2 = pd.DataFrame([{
+    'Режим Скорости': 'theoretical', # Хотим, чтобы это дало 'Режим Скорости_historical' = 1: "actual", "historical", "theoretical"
+    'Метод Выбора': 'random',    # Хотим, чтобы это дало 'Метод Выбора_random' = 1: "weighted-probability", "minimum", "random"
+    'Светофоры': 'Вкл',          # Хотим, чтобы 'Светофоры_Выкл' = 0: 'Вкл', 'Выкл'
+    'Случ-е События': 'Да',      # Хотим, чтобы 'Случ-е События_Нет' = 1: 'Да', 'Нет'
+    'Мост': 'Закрыт',           # Хотим, чтобы 'Мост_Открыт' = 1: 'Открыт', 'Закрыт'
     'Интенс-ть': 0.45,
     'Коэф. Сопрот-я': 0.5,
 }])
 
-# Применяем ту же One-Hot Encoding, что и для обучающих данных
-# reindex позволяет убедиться, что все колонки из X присутствуют, заполняя отсутствующие нулями
-example_data_processed = pd.get_dummies(example_data_raw, columns=[col for col in FEATURE_COLUMNS if example_data_raw[col].dtype == 'object'], drop_first=True).reindex(columns=X.columns, fill_value=0)
+# КОПИРУЕМ DataFrame, чтобы не изменять оригинал, если он еще нужен
+example_df_for_dummies = example_data_raw_v2.copy()
 
+# Применяем CategoricalDtype
+for col, known_categories in categories_map.items():
+    if col in example_df_for_dummies.columns:
+        # Устанавливаем тип Categorical с известными категориями
+        # Это гарантирует, что get_dummies знает обо всех вариантах
+        cat_dtype = pd.CategoricalDtype(categories=known_categories, ordered=False)
+        example_df_for_dummies[col] = example_df_for_dummies[col].astype(cat_dtype)
 
-# Делаем прогноз
-predicted_time_example = model.predict(example_data_processed)
+# Теперь pd.get_dummies должен работать корректно для одной строки
+# Список 'columns' для get_dummies теперь не нужен, так как мы преобразовали типы
+example_data_processed_v2 = pd.get_dummies(
+    example_df_for_dummies,
+    drop_first=True
+).reindex(columns=X.columns, fill_value=0) # X.columns - это колонки из ТРЕНИРОВОЧНОГО набора X
 
-print(f"\nПараметры для прогноза: {example_data_raw.iloc[0].to_dict()}")
-print(f"Прогнозируемое нормализованное среднее время: {predicted_time_example[0]:.4f}")
+print("\nDEBUG: Обработанные признаки для измененного прогноза (example_data_processed_v2):")
+# Распечатайте ВСЕ столбцы, чтобы убедиться
+with pd.option_context('display.max_columns', None): # Показать все столбцы
+    print(example_data_processed_v2)
+
+predicted_time_example_v2 = model.predict(example_data_processed_v2)
+
+print(f"\nПараметры для измененного прогноза: {example_data_raw_v2.iloc[0].to_dict()}")
+print(f"Прогнозируемое нормализованное среднее время (измененный): {predicted_time_example_v2[0]:.4f}")

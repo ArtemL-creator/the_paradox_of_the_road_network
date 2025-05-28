@@ -17,10 +17,10 @@ from road_event import RoadEvent
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
 bridge_blocked = False
-traffic_light_on = False
-road_events_on = True
+traffic_light_on = True
+road_events_on = False
 routing_mode = "selfish"  # или "random", "selfish"
-speed_mode = "theoretical"  # альтернативы: "actual", "historical", "theoretical"
+speed_mode = "historical"  # альтернативы: "actual", "historical", "theoretical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
@@ -28,15 +28,15 @@ next_departure = 0  # следующий такт, когда можно отп�
 max_cars = 1500  # float("inf")         # если не задано – не ограничено
 
 # Переменная для записи в файл
-is_writing = True
+is_writing = False
 
 car_radius = 3
 car_length = 2 * car_radius
 total_path_length = 1620
 car_queue_size = int(total_path_length / car_length) + 10
 speed_limit = 3
-launch_rate = 0.55
-congestion_coef = 0.55
+launch_rate = 0.45
+congestion_coef = 0.5
 quickest_trip = 582 / speed_limit
 geek_mode = False
 hint_mode = True
@@ -134,7 +134,7 @@ if args.max_cars is not None:
     print(f"[Config] Max Cars set to: {max_cars}")
 
 if args.is_writing is not None:
-    is_writing = args.is_writing
+    is_writing = args.is_writing.lower() == 'true'
     print(f"[Config] Writing to a file set to: {is_writing}")
 
 
@@ -1208,6 +1208,23 @@ def step():
         print("Достигнуто максимальное число автомобилей, остановка запуска.")
     return True
 
+def print_simulation_parameters():
+    """Выводит текущие параметры симуляции в консоль."""
+    print("\n--- Сводка параметров симуляции ---")
+    print(f"  Мост заблокирован: {'Да' if bridge_blocked else 'Нет'}")
+    print(f"  Светофоры включены: {'Да' if traffic_light_on else 'Нет'}")
+    print(f"  Дорожные события: {'Да' if road_events_on else 'Нет'}")
+    print(f"  Режим маршрутизации: {routing_mode}")
+    print(f"  Режим скорости: {speed_mode}")
+    # Выводим selection_method только если routing_mode не "random"
+    if routing_mode != "random":
+        print(f"  Метод выбора маршрута: {selection_method}")
+    else:
+        print(f"  Метод выбора маршрута: N/A (режим 'random')")
+    print(f"  Интенсивность запуска: {launch_rate:.4f}")
+    print(f"  Коэффициент сопротивления: {congestion_coef:.4f}")
+    print(f"  Запись результатов в файл: {'Да' if is_writing else 'Нет'}")
+    print("------------------------------------\n")
 
 def animate():
     running = True
@@ -1224,6 +1241,7 @@ def animate():
         elif not running:
             final_outcome = "Stopped Externally"  # Если остановили другим способом
             print("[Animate] Симуляция остановлена.")
+        print_simulation_parameters()
 
     except SystemExit as e:
         # Если был вызван sys.exit() (например, из-за deadlock)
