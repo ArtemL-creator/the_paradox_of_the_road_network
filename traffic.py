@@ -17,10 +17,10 @@ from road_event import RoadEvent
 # Глобальные переменные
 model_state = "stopped"  # "stopped", "running", "stopping"
 bridge_blocked = False
-traffic_light_on = True
+traffic_light_on = False
 road_events_on = False
 routing_mode = "selfish"  # или "random", "selfish"
-speed_mode = "historical"  # альтернативы: "actual", "historical", "theoretical"
+speed_mode = "theoretical"  # альтернативы: "actual", "historical", "theoretical"
 selection_method = "minimum"  # или "weighted-probability", "minimum"
 launch_timing = "poisson"  # альтернативы: "uniform", "periodic"
 global_clock = 0  # счётчик тактов симуляции
