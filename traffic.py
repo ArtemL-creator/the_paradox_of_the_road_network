@@ -211,10 +211,10 @@ class Node:
                     else:
                         # !!! ЛОГИРУЕМ ПРИЧИНУ НЕВОЗМОЖНОСТИ ВЪЕЗДА !!!
                         blocker_progress = free_lane.queue.items[-1].progress if free_lane.queue.len > 0 else -1
-                        print(
-                            f"[GRIDLOCK_DEBUG] Узел {self.node_name}: Машина {self.car.serial_number} НЕ МОЖЕТ въехать на {next_link.id} (ЗЕЛЕНЫЙ).")
-                        print(
-                            f"[GRIDLOCK_DEBUG]   Причина: Полоса {free_lane.lane_id} занята. Очередь={free_lane.queue.len}, Прогресс последней машины={blocker_progress:.2f} (нужно >= {car_length})")
+                        # print(
+                        #     f"[GRIDLOCK_DEBUG] Узел {self.node_name}: Машина {self.car.serial_number} НЕ МОЖЕТ въехать на {next_link.id} (ЗЕЛЕНЫЙ).")
+                        # print(
+                        #     f"[GRIDLOCK_DEBUG]   Причина: Полоса {free_lane.lane_id} занята. Очередь={free_lane.queue.len}, Прогресс последней машины={blocker_progress:.2f} (нужно >= {car_length})")
                 else:
                     print("Нет свободных полос на участке", next_link.id)
             else:
@@ -246,7 +246,7 @@ class TrafficNode(Node):
         if self.car and self.arrived_from_link:  # Проверяем, что машина и информация о прибытии есть
             current_phase_index = self.traffic_light.get_phase()
             # print(f"[LOG DISPATCH] Узел {self.node_name} пытается отправить машину {self.car.serial_number}")
-            print(f"[LOG DISPATCH] Узел {self.node_name}: текущая фаза = {current_phase_index}")
+            # print(f"[LOG DISPATCH] Узел {self.node_name}: текущая фаза = {current_phase_index}")
 
             # Получаем ID линка, С КОТОРОГО прибыла машина
             incoming_link_id = self.arrived_from_link.id
@@ -256,21 +256,21 @@ class TrafficNode(Node):
 
             if incoming_link_id in allowed_incoming_links:
                 # ДА, въезд с этого направления разрешен (зеленый для приехавших с incoming_link_id)
-                print(
-                    f"[LOG DISPATCH] Узел {self.node_name}: Фаза {current_phase_index}. Въезд с {incoming_link_id} РАЗРЕШЕН.")
+                # print(
+                #     f"[LOG DISPATCH] Узел {self.node_name}: Фаза {current_phase_index}. Въезд с {incoming_link_id} РАЗРЕШЕН.")
 
                 # Теперь определяем, КУДА машина хочет ехать дальше по своему маршруту
                 next_link_outgoing = self.car.route.directions.get(self.node_name)
 
                 if next_link_outgoing is not None:
-                    print(f"[LOG DISPATCH]   Машина {self.car.serial_number} хочет на -> {next_link_outgoing.id}")
+                    # print(f"[LOG DISPATCH]   Машина {self.car.serial_number} хочет на -> {next_link_outgoing.id}")
                     # Пытаемся отправить на ЛЮБОЙ разрешенный маршрутом выходной линк,
                     # проверяя только наличие места на нем.
                     free_lane = next_link_outgoing.choose_free_lane()
                     if free_lane is not None:
                         can_enter_next = free_lane.queue.len == 0 or free_lane.queue.items[-1].progress >= car_length
                         if can_enter_next:
-                            print(f"[LOG DISPATCH]   Отправлена на {next_link_outgoing.id}, полоса {free_lane.lane_id}")
+                            # print(f"[LOG DISPATCH]   Отправлена на {next_link_outgoing.id}, полоса {free_lane.lane_id}")
                             self.car.progress = 0
                             self.car.avatar.set_position(self.x, self.y)
                             free_lane.queue.enqueue(self.car)
@@ -278,18 +278,21 @@ class TrafficNode(Node):
                             self.car = None  # Освобождаем узел
                             self.arrived_from_link = None  # Сбрасываем инфо о прибытии
                         else:
-                            print(f"[LOG DISPATCH]   НЕ отправлена. Участок {next_link_outgoing.id} занят у въезда.")
+                            pass
+                            # print(f"[LOG DISPATCH]   НЕ отправлена. Участок {next_link_outgoing.id} занят у въезда.")
                             # Машина остается на узле ждать следующей попытки dispatch
                     else:
-                        print(f"[LOG DISPATCH]   НЕ отправлена. Нет свободных полос на {next_link_outgoing.id}.")
+                        pass
+                        # print(f"[LOG DISPATCH]   НЕ отправлена. Нет свободных полос на {next_link_outgoing.id}.")
                 else:
-                    print(f"[LOG DISPATCH]   НЕ отправлена. Нет следующего участка в маршруте?")
+                    pass
+                    # print(f"[LOG DISPATCH]   НЕ отправлена. Нет следующего участка в маршруте?")
 
             else:
                 # НЕТ, въезд с этого направления запрещен (красный для приехавших с incoming_link_id)
                 self.car.waiting_time += 1
-                print(
-                    f"[LOG DISPATCH] Узел {self.node_name}: Фаза {current_phase_index}. Въезд с {incoming_link_id} ЗАПРЕЩЕН (красный). Машина {self.car.serial_number} ждёт ({self.car.waiting_time}).")
+                # print(
+                #     f"[LOG DISPATCH] Узел {self.node_name}: Фаза {current_phase_index}. Въезд с {incoming_link_id} ЗАПРЕЩЕН (красный). Машина {self.car.serial_number} ждёт ({self.car.waiting_time}).")
                 # Ничего не делаем, машина ждет на узле
                 return  # Явно выходим, т.к. отправка невозможна
 
@@ -346,7 +349,7 @@ class Link:
         """Выбирает свободную полосу с наименьшей очередью, при равенстве выбирается случайно."""
         free_lanes = [lane for lane in self.lanes if not lane.is_blocked]
         if not free_lanes:
-            print(f"[LOG LANE CHOICE] Дорога {self.id}: все полосы заблокированы!")
+            # print(f"[LOG LANE CHOICE] Дорога {self.id}: все полосы заблокированы!")
             return None  # Все полосы заблокированы
 
         # Определяем минимальную длину очереди среди свободных полос
@@ -378,8 +381,8 @@ class Link:
         candidate_lanes = [lane for lane in self.lanes if lane is not blocked_lane and not lane.is_blocked and abs(
             lane.lane_id - blocked_lane.lane_id) == 1]
         if not candidate_lanes:
-            print(
-                f"[LANE CHANGE] Нет соседних незаблокированных полос для участка {self.id} от полосы {blocked_lane.lane_id}")
+            # print(
+            #     f"[LANE CHANGE] Нет соседних незаблокированных полос для участка {self.id} от полосы {blocked_lane.lane_id}")
             return False
 
         # Если несколько кандидатов, выбираем случайно
@@ -391,11 +394,11 @@ class Link:
             while blocked_lane.queue.len > 0:
                 car = blocked_lane.queue.dequeue()
                 target_lane.queue.enqueue(car)
-                print(
-                    f"[LANE CHANGE] Машина {car.serial_number} переехала с полосы {blocked_lane.lane_id} на соседнюю полосу {target_lane.lane_id} участка {self.id}")
+                # print(
+                #     f"[LANE CHANGE] Машина {car.serial_number} переехала с полосы {blocked_lane.lane_id} на соседнюю полосу {target_lane.lane_id} участка {self.id}")
             return True
         else:
-            print(f"[LANE CHANGE] Соседняя полоса {target_lane.lane_id} участка {self.id} не готова принять автомобили")
+            # print(f"[LANE CHANGE] Соседняя полоса {target_lane.lane_id} участка {self.id} не готова принять автомобили")
             return False
 
     def drive(self):
@@ -509,11 +512,11 @@ class Route:
 
     def calc_travel_time_theoretical(self):
         tt = 0
-        print(f"[LOG ROUTE TIME CALC] Маршрут {self.label}:")
+        # print(f"[LOG ROUTE TIME CALC] Маршрут {self.label}:")
         for link in self.itinerary:
             tt += link.travel_time
-            print(
-                f"[LOG ROUTE TIME CALC]   Участок {link.id}: длина={link.path_length}, скорость={link.speed}, время={link.travel_time}")
+            # print(
+            #     f"[LOG ROUTE TIME CALC]   Участок {link.id}: длина={link.path_length}, скорость={link.speed}, время={link.travel_time}")
         self.travel_time = tt
 
     def calc_travel_time_theoretical_with_lights(self):
@@ -796,23 +799,23 @@ def choose_route():
     # Принудительно обновить время для всех маршрутов
     for route in available_routes:
         route.calc_travel_time()
-        print(f"[LOG ROUTE SELECTION] Маршрут {route.label}: теоретическое время = {route.travel_time}")
+        # print(f"[LOG ROUTE SELECTION] Маршрут {route.label}: теоретическое время = {route.travel_time}")
 
     if routing_mode == "random":
         chosen_route = Chooser.random_choice(available_routes)
-        print(f"[LOG ROUTE SELECTION] Выбран случайный маршрут: {chosen_route.label}")
+        # print(f"[LOG ROUTE SELECTION] Выбран случайный маршрут: {chosen_route.label}")
         return chosen_route
     else:
         for route in available_routes:
             route.calc_travel_time()
         if selection_method == "minimum":
             chosen_route = Chooser.min_choice(available_routes)
-            print(
-                f"[LOG ROUTE SELECTION] Выбран маршрут с минимальным временем: {chosen_route.label} (время = {chosen_route.travel_time})")
+            # print(
+            #     f"[LOG ROUTE SELECTION] Выбран маршрут с минимальным временем: {chosen_route.label} (время = {chosen_route.travel_time})")
             return chosen_route
         else:
             chosen_route = Chooser.probabilistic(available_routes)
-            print(f"[LOG ROUTE SELECTION] Выбран маршрут вероятностным методом: {chosen_route.label}")
+            # print(f"[LOG ROUTE SELECTION] Выбран маршрут вероятностным методом: {chosen_route.label}")
             return chosen_route
 
 

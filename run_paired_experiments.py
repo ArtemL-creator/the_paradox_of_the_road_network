@@ -12,16 +12,16 @@ RESULTS_CSV_FILE = 'resources\\simulation_log.csv'
 
 # Количество ПАР запусков (т.е. сколько раз будут сгенерированы УНИКАЛЬНЫЕ случайные параметры для пары мост закрыт/мост открыт)
 # Общее количество симуляций будет N_PAIRS * 2
-N_PAIRS = 250 # Количество пар запусков
+N_PAIRS = 125 # Количество пар запусков
 # Переменная для записи в файл
 is_writing = True
 
 # Определение диапазонов или списков возможных значений для случайного выбора
 # Исключаем 'bridge_blocked' из этого списка, так как он будет перебираться явно
 parameter_generation_rules = {
-    'congestion_coef': (0.45, 0.55),
+    'congestion_coef': (0.3, 0.7),
     'launch_rate': (0.3, 0.7),  # Случайное значение float между 0.3 и 1.0
-    'traffic_light_on': [True, False],  # Случайный выбор из [True, False]
+    'traffic_light_on': [True, False],
     'road_events_on': [True, False],  # Случайный выбор из [True, False]
     'routing_mode': ["selfish", "random"],  # Случайный выбор из ["selfish", "random"]
     'speed_mode': ["theoretical", "actual", "historical"],
