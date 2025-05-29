@@ -215,31 +215,44 @@ if num_unique_combinations > len(custom_markers):
 # --- Шаг 3: Измените код построения графика ---
 # Проверяем, что анализ дал результаты и есть данные для графика
 if not analysis_df.empty:
-    plt.figure(figsize=(12, 8)) # Увеличим размер графика для лучшей читаемости точек и легенды
-
-    # Используем правильные имена столбцов из DataFrame
+    # --- Первый график: Интенсивность vs. Разница времени ---
+    plt.figure(figsize=(12, 8))  # Создаем новую фигуру для первого графика
     sns.scatterplot(
         data=analysis_df,
         x='Интенс-ть_rounded',
-        # x='Коэф. Сопрот-я_rounded',
         y='Разница_Время_(Открыт - Закрыт)',
-        # hue='Метод Выбора', # ИСПРАВЛЕНО: Использовать имя столбца из данных
-        style='Комбинированный_Режим', # Это имя столбца по CSV
-        s=100, # Размер точек
-        alpha=0.7, # Прозрачность точек
-    color = 'black'  # Устанавливаем все точки черными для черно-белой печати
+        style='Комбинированный_Режим',
+        s=100,
+        alpha=0.7,
+        color='black'
     )
-
-    plt.axhline(0, color='grey', linestyle='--', linewidth=0.8) # Линия на уровне 0 для визуализации разницы
+    plt.axhline(0, color='grey', linestyle='--', linewidth=0.8)
     plt.title('Влияние Интенсивности на разницу времени (Открыт - Закрыт) по режимам')
-    # plt.title('Влияние Коэффициента Сопротивления на разницу времени (Открыт - Закрыт) по режимам')
     plt.xlabel(f'Интенсивность запуска (округлено до {ROUND_DECIMALS} знаков)')
-    # plt.xlabel(f'Коэффициент сопротивления (округлено до {ROUND_DECIMALS} знаков)')
     plt.ylabel('Разница в нормализованном среднем времени (Время_Открыт - Время_Закрыт)')
     plt.grid(True, which='both', linestyle=':', linewidth=0.5)
+    plt.legend(title='Обозначения:', bbox_to_anchor=(1.02, 1), loc='upper left')
+    plt.tight_layout()
 
-    plt.legend(title='Обозначения:', bbox_to_anchor=(1.02, 1), loc='upper left') # Настройка легенды
-    plt.tight_layout() # Автоматическая настройка отступов
+    # --- Второй график: Коэффициент Сопротивления vs. Разница времени ---
+    plt.figure(figsize=(12, 8))  # Создаем вторую фигуру для второго графика
+    sns.scatterplot(
+        data=analysis_df,
+        x='Коэф. Сопрот-я_rounded',  # Используем другой столбец для оси X
+        y='Разница_Время_(Открыт - Закрыт)',
+        style='Комбинированный_Режим',
+        s=100,
+        alpha=0.7,
+        color='black'
+    )
+    plt.axhline(0, color='grey', linestyle='--', linewidth=0.8)
+    plt.title('Влияние Коэффициента Сопротивления на разницу времени (Открыт - Закрыт) по режимам')
+    plt.xlabel(f'Коэффициент сопротивления (округлено до {ROUND_DECIMALS} знаков)')
+    plt.ylabel('Разница в нормализованном среднем времени (Время_Открыт - Время_Закрыт)')
+    plt.grid(True, which='both', linestyle=':', linewidth=0.5)
+    plt.legend(title='Обозначения:', bbox_to_anchor=(1.02, 1), loc='upper left')
+    plt.tight_layout()
+
     plt.show()
 else:
     print("\nНет данных в analysis_df для построения графика.")
